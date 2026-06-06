@@ -116,8 +116,7 @@ const CATEGORY_STORAGE_KEY = 'dc-tavern-categories:v1'
 const THEME_KEY = 'dc-tavern-theme:v1'
 const SITE_TITLE_KEY = 'dc-tavern-site-title:v1'
 const ADMIN_SESSION_KEY = 'dc-tavern-admin-session:v1'
-const ADMIN_ACCOUNT = 'admin'
-const ADMIN_PASSWORD = 'admin'
+const ADMIN_CREDENTIAL_KEY = 'dc-tavern-admin-credential:v1'
 const DEFAULT_SITE_TITLE = 'DC 酒馆卡展示'
 const ALL_CATEGORY = '全部'
 const DEFAULT_CATEGORY = ''
@@ -132,9 +131,6 @@ const RECOMMENDED_CATEGORY = '__recommended'
 const RECOMMENDED_SECTION_ID = 'recommended-section'
 const DISCORD_LINK_PATTERN =
   /https?:\/\/(?:(?:canary|ptb)\.)?discord\.com\/channels\/\S+/i
-
-const SAMPLE_IMPORT = `28cg 失踪归来的三无妹妹怎么是去当勇者了？！
-https://discord.com/channels/1380075940285124724/1512507653308547133`
 
 function makeId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -521,24 +517,22 @@ function migrateStoredCard(value: unknown): TavernCard | null {
 }
 
 function getInitialCards() {
-  const seededCards = parseImportText(SAMPLE_IMPORT).map((card) => toCard(card))
-
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
     if (!stored) {
-      return seededCards
+      return []
     }
 
     const parsed = JSON.parse(stored) as unknown[]
     if (!Array.isArray(parsed)) {
-      return seededCards
+      return []
     }
 
     return parsed
       .map((card) => migrateStoredCard(card))
       .filter((card): card is TavernCard => Boolean(card))
   } catch {
-    return seededCards
+    return []
   }
 }
 
@@ -592,6 +586,34 @@ function getInitialSiteTitle() {
   }
 }
 
+function getStoredAdminCredential() {
+  try {
+    const stored = window.localStorage.getItem(ADMIN_CREDENTIAL_KEY)
+    const parsed = stored ? (JSON.parse(stored) as unknown) : null
+    const credential = parsed as Partial<{
+      account: string
+      password: string
+    }> | null
+
+    if (
+      credential &&
+      typeof credential.account === 'string' &&
+      typeof credential.password === 'string' &&
+      credential.account.trim() &&
+      credential.password
+    ) {
+      return {
+        account: credential.account.trim(),
+        password: credential.password,
+      }
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
 function getInitialAdmin() {
   const localHosts = new Set(['localhost', '127.0.0.1', '::1'])
 
@@ -600,6 +622,13 @@ function getInitialAdmin() {
   }
 
   try {
+    const hasCredential = Boolean(getStoredAdminCredential())
+
+    if (!hasCredential) {
+      window.localStorage.removeItem(ADMIN_SESSION_KEY)
+      return false
+    }
+
     return window.localStorage.getItem(ADMIN_SESSION_KEY) === 'active'
   } catch {
     return false
@@ -1171,6 +1200,9 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(getInitialAdmin)
   const [isEditMode, setIsEditMode] = useState(false)
   const [adminDialogOpen, setAdminDialogOpen] = useState(false)
+  const [adminConfigured, setAdminConfigured] = useState(() =>
+    Boolean(getStoredAdminCredential()),
+  )
   const [adminAccount, setAdminAccount] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
   const [adminError, setAdminError] = useState('')
@@ -1201,7 +1233,7 @@ function App() {
   const [recommended, setRecommended] = useState(false)
   const [addFormError, setAddFormError] = useState('')
   const [query, setQuery] = useState('')
-  const [importText, setImportText] = useState(SAMPLE_IMPORT)
+  const [importText, setImportText] = useState('')
   const [importCategory, setImportCategory] = useState(DEFAULT_CATEGORY)
   const [importRecommended, setImportRecommended] = useState(false)
   const [importError, setImportError] = useState('')
@@ -1629,10 +1661,27 @@ function App() {
 
   function enterAdmin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const nextAccount = adminAccount.trim()
 
-    if (
-      adminAccount.trim() !== ADMIN_ACCOUNT ||
-      adminPassword !== ADMIN_PASSWORD
+    if (!nextAccount || !adminPassword) {
+      setAdminError('请填写账号和密码')
+      return
+    }
+
+    const credential = getStoredAdminCredential()
+
+    if (!credential) {
+      window.localStorage.setItem(
+        ADMIN_CREDENTIAL_KEY,
+        JSON.stringify({
+          account: nextAccount,
+          password: adminPassword,
+        }),
+      )
+      setAdminConfigured(true)
+    } else if (
+      nextAccount !== credential.account ||
+      adminPassword !== credential.password
     ) {
       setAdminError('账号或密码不正确')
       return
@@ -1645,7 +1694,7 @@ function App() {
     setAdminPassword('')
     setAdminError('')
     window.localStorage.setItem(ADMIN_SESSION_KEY, 'active')
-    notify('已进入 admin 浏览模式')
+    notify(credential ? '已进入 admin 浏览模式' : '已创建 admin')
   }
 
   function leaveAdmin() {
@@ -2379,21 +2428,6 @@ function App() {
                     读剪贴板
                   </Button>
                 </div>
-                <Button
-                  className="w-full"
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setImportCategory(DEFAULT_CATEGORY)
-                    setImportRecommended(false)
-                    setImportText(SAMPLE_IMPORT)
-                    setImportError('')
-                    addCards(parseImportText(SAMPLE_IMPORT), DEFAULT_CATEGORY)
-                  }}
-                >
-                  <RotateCcw />
-                  导入示例
-                </Button>
               </CardContent>
             </Card>
 
@@ -2504,9 +2538,9 @@ function App() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Admin</DialogTitle>
+            <DialogTitle>{adminConfigured ? 'Admin' : '设置 Admin'}</DialogTitle>
             <DialogDescription className="sr-only">
-              Admin 会话登录
+              {adminConfigured ? 'Admin 会话登录' : '创建本地 admin 账号'}
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={enterAdmin}>
@@ -2547,7 +2581,7 @@ function App() {
               </Button>
               <Button type="submit">
                 <Lock />
-                进入
+                {adminConfigured ? '进入' : '创建'}
               </Button>
             </div>
           </form>
