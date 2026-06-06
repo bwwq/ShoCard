@@ -816,64 +816,100 @@ function buildCategoryTree(categories: string[], cards: TavernCard[]): CategoryN
   return toCategoryNodes(roots)
 }
 
+function flattenCategoryTree(nodes: CategoryNode[]) {
+  const categories: string[] = []
+
+  for (const node of nodes) {
+    categories.push(node.path)
+    categories.push(...flattenCategoryTree(node.children))
+  }
+
+  return categories
+}
+
 type CategoryTreeProps = {
   activeCategory: string
   draggedCategory: string
+  dragReadyCategory: string
   depth?: number
   dropCategory: string
   dropPosition: CategoryDropPosition | null
   isEditMode: boolean
   nodes: CategoryNode[]
   onCreateChild: (parentCategory: string) => void
-  onDragEnd: () => void
   onDragLeave: () => void
   onDragOver: (
     event: DragEvent<HTMLDivElement>,
     targetCategory: string,
     position: CategoryDropPosition,
   ) => void
-  onDragStart: (category: string) => void
   onDrop: (
     event: DragEvent<HTMLDivElement>,
     targetCategory: string,
     position: CategoryDropPosition,
   ) => void
   onJump: (category: string) => void
+  onPointerCancel: (event: PointerEvent<HTMLDivElement>) => void
+  onPointerDown: (
+    event: PointerEvent<HTMLDivElement>,
+    category: string,
+  ) => void
+  onPointerMove: (event: PointerEvent<HTMLDivElement>) => void
+  onPointerUp: (event: PointerEvent<HTMLDivElement>) => void
   onRename: (category: string) => void
+  pressingCategory: string
 }
 
 function CategoryTree({
   activeCategory,
   draggedCategory,
+  dragReadyCategory,
   depth = 0,
   dropCategory,
   dropPosition,
   isEditMode,
   nodes,
   onCreateChild,
-  onDragEnd,
   onDragLeave,
   onDragOver,
-  onDragStart,
   onDrop,
   onJump,
+  onPointerCancel,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
   onRename,
+  pressingCategory,
 }: CategoryTreeProps) {
   return (
-    <div className="space-y-1">
-      {nodes.map((node) => (
-        <div
-          key={node.path}
-          className={`space-y-1 rounded-md ${
-            draggedCategory === node.path ? 'opacity-50' : ''
-          }`}
-        >
+    <div className="space-y-1.5">
+      {nodes.map((node) => {
+        const isActive = activeCategory === node.path
+        const isHolding = pressingCategory === node.path
+        const isDragReady = dragReadyCategory === node.path
+        const isDragged = draggedCategory === node.path
+        const isDropTarget = dropCategory === node.path && dropPosition
+
+        return (
           <div
-            className={`flex items-center gap-1 rounded-md ${
-              dropCategory === node.path && dropPosition
-                ? 'ring-2 ring-ring'
+            key={node.path}
+            className={`space-y-1.5 rounded-lg ${isDragged ? 'opacity-70' : ''}`}
+          >
+          <div
+            className={`group/category relative flex min-h-11 items-center gap-1 overflow-visible rounded-lg border border-transparent px-1 py-1 transition-all ${
+              isActive
+                ? 'bg-primary text-primary-foreground shadow-hairline'
+                : 'text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-accent-foreground'
+            } ${
+              isDropTarget
+                ? dropPosition === 'before'
+                  ? 'category-drop-before'
+                  : 'category-drop-after'
                 : ''
+            } ${isHolding && !isDragReady ? 'category-hold-effect' : ''} ${
+              isDragReady ? 'category-drag-ready' : ''
             }`}
+            data-category-drop-target={node.path}
             onDragLeave={isEditMode ? onDragLeave : undefined}
             onDragOver={
               isEditMode
@@ -899,46 +935,47 @@ function CategoryTree({
                   }
                 : undefined
             }
+            onContextMenu={
+              isEditMode ? (event) => event.preventDefault() : undefined
+            }
+            onPointerCancel={isEditMode ? onPointerCancel : undefined}
+            onPointerDown={
+              isEditMode
+                ? (event) => onPointerDown(event, node.path)
+                : undefined
+            }
+            onPointerMove={isEditMode ? onPointerMove : undefined}
+            onPointerUp={isEditMode ? onPointerUp : undefined}
           >
-            {isEditMode ? (
-              <button
-                aria-label={`拖动 ${node.path}`}
-                className="flex size-10 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground transition-colors active:cursor-grabbing hover:bg-accent hover:text-accent-foreground"
-                draggable
-                title="拖动排序"
-                type="button"
-                style={{ marginLeft: depth * 14 }}
-                onDragEnd={onDragEnd}
-                onDragStart={(event) => {
-                  event.dataTransfer.effectAllowed = 'move'
-                  event.dataTransfer.setData('text/plain', node.path)
-                  onDragStart(node.path)
-                }}
-              >
-                <GripVertical className="size-4" />
-              </button>
-            ) : null}
             <button
-              className={`flex h-10 min-w-0 flex-1 items-center justify-between gap-3 rounded-md pr-3 text-left text-sm transition-colors ${
-                activeCategory === node.path
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-              }`}
-              style={{ paddingLeft: isEditMode ? 12 : 12 + depth * 14 }}
+              className="flex h-9 min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-2 text-left text-sm transition-colors"
+              style={{ paddingLeft: 10 + depth * 16 }}
               type="button"
               onClick={() => onJump(node.path)}
             >
               <span className="flex min-w-0 items-center gap-2">
-                <Folder className="size-4 shrink-0" />
-                <span className="truncate">{node.name}</span>
+                {isEditMode ? (
+                  <GripVertical className="size-3.5 shrink-0 opacity-0 transition-opacity group-hover/category:opacity-45" />
+                ) : null}
+                <Folder className="size-4 shrink-0 opacity-80" />
+                <span className="truncate font-medium">{node.name}</span>
               </span>
-              <span className="shrink-0">{node.count}</span>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-xs font-medium ${
+                  isActive
+                    ? 'bg-primary-foreground/15 text-primary-foreground'
+                    : 'bg-muted text-muted-foreground'
+                }`}
+              >
+                {node.count}
+              </span>
             </button>
             {isEditMode ? (
-              <>
+              <div className="flex shrink-0 items-center gap-0.5 opacity-75 transition-opacity group-hover/category:opacity-100 group-focus-within/category:opacity-100">
                 <button
                   aria-label={`重命名 ${node.path}`}
-                  className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-background/80 hover:text-foreground"
+                  data-category-action="true"
                   title="重命名分类"
                   type="button"
                   onClick={() => onRename(node.path)}
@@ -947,37 +984,43 @@ function CategoryTree({
                 </button>
                 <button
                   aria-label={`创建 ${node.path} 的子分类`}
-                  className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-background/80 hover:text-foreground"
+                  data-category-action="true"
                   title="创建子分类"
                   type="button"
                   onClick={() => onCreateChild(node.path)}
                 >
                   <Plus className="size-4" />
                 </button>
-              </>
+              </div>
             ) : null}
           </div>
           {node.children.length ? (
             <CategoryTree
               activeCategory={activeCategory}
               draggedCategory={draggedCategory}
+              dragReadyCategory={dragReadyCategory}
               depth={depth + 1}
               dropCategory={dropCategory}
               dropPosition={dropPosition}
               isEditMode={isEditMode}
               nodes={node.children}
               onCreateChild={onCreateChild}
-              onDragEnd={onDragEnd}
               onDragLeave={onDragLeave}
               onDragOver={onDragOver}
-              onDragStart={onDragStart}
               onDrop={onDrop}
               onJump={onJump}
+              onPointerCancel={onPointerCancel}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
               onRename={onRename}
+              pressingCategory={pressingCategory}
             />
           ) : null}
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -1433,6 +1476,8 @@ function App() {
   const [renameCategoryDraft, setRenameCategoryDraft] = useState('')
   const [renameCategoryError, setRenameCategoryError] = useState('')
   const [draggedCategory, setDraggedCategory] = useState('')
+  const [pressingCategory, setPressingCategory] = useState('')
+  const [dragReadyCategory, setDragReadyCategory] = useState('')
   const [dropCategory, setDropCategory] = useState('')
   const [dropPosition, setDropPosition] =
     useState<CategoryDropPosition | null>(null)
@@ -1486,6 +1531,15 @@ function App() {
     Boolean(getLegacyState()),
   )
   const lastSavedStateRef = useRef('')
+  const categoryPressTimerRef = useRef<number | null>(null)
+  const categoryPointerDragRef = useRef<{
+    category: string
+    isReady: boolean
+    pointerId: number
+    startX: number
+    startY: number
+  } | null>(null)
+  const suppressCategoryClickRef = useRef('')
   const titleTapCountRef = useRef(0)
   const titleTapTimerRef = useRef<number | null>(null)
 
@@ -1587,6 +1641,9 @@ function App() {
       if (titleTapTimerRef.current) {
         window.clearTimeout(titleTapTimerRef.current)
       }
+      if (categoryPressTimerRef.current) {
+        window.clearTimeout(categoryPressTimerRef.current)
+      }
     }
   }, [])
 
@@ -1611,6 +1668,10 @@ function App() {
     () => buildCategoryTree(categories, cards),
     [cards, categories],
   )
+  const categoryTreeOrder = useMemo(
+    () => flattenCategoryTree(categoryTree),
+    [categoryTree],
+  )
 
   const filteredCards = useMemo(() => {
     const trimmedQuery = query.trim().toLowerCase()
@@ -1631,7 +1692,7 @@ function App() {
   const groupedCards = useMemo(() => {
     const categoryMap = new Map<string, TavernCard[]>()
     const categoryOrder = new Map(
-      categories.map((categoryName, index) => [categoryName, index]),
+      categoryTreeOrder.map((categoryName, index) => [categoryName, index]),
     )
 
     for (const card of filteredCards) {
@@ -1654,7 +1715,7 @@ function App() {
 
       return leftOrder - rightOrder
     })
-  }, [categories, filteredCards])
+  }, [categoryTreeOrder, filteredCards])
 
   const recommendedCards = useMemo(
     () => filteredCards.filter((card) => card.recommended),
@@ -1982,58 +2043,72 @@ function App() {
     setDropPosition(null)
   }
 
+  function clearCategoryPressTimer() {
+    if (categoryPressTimerRef.current) {
+      window.clearTimeout(categoryPressTimerRef.current)
+      categoryPressTimerRef.current = null
+    }
+  }
+
+  function resetCategoryLongPressState() {
+    clearCategoryPressTimer()
+    categoryPointerDragRef.current = null
+    setPressingCategory('')
+    setDragReadyCategory('')
+    resetCategoryDragState()
+  }
+
   function dragCategory(categoryPath: string) {
     setDraggedCategory(cleanCategory(categoryPath))
   }
 
-  function hoverCategoryDrop(
-    event: DragEvent<HTMLDivElement>,
+  function previewCategoryDrop(
+    sourceCategory: string,
     targetCategory: string,
     position: CategoryDropPosition,
   ) {
-    const sourceCategory = cleanCategory(draggedCategory)
+    const nextSourceCategory = cleanCategory(sourceCategory)
     const nextTargetCategory = cleanCategory(targetCategory)
 
     if (
-      !sourceCategory ||
+      !nextSourceCategory ||
       !nextTargetCategory ||
-      sourceCategory === nextTargetCategory ||
-      getCategoryParent(sourceCategory) !== getCategoryParent(nextTargetCategory)
+      nextSourceCategory === nextTargetCategory ||
+      getCategoryParent(nextSourceCategory) !==
+        getCategoryParent(nextTargetCategory)
     ) {
-      return
+      setDropCategory('')
+      setDropPosition(null)
+      return false
     }
 
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
     setDropCategory(nextTargetCategory)
     setDropPosition(position)
+    return true
   }
 
-  function dropCategoryOnCategory(
-    event: DragEvent<HTMLDivElement>,
+  function reorderCategory(
+    sourceCategory: string,
     targetCategory: string,
     position: CategoryDropPosition,
   ) {
-    event.preventDefault()
-
-    const sourceCategory = cleanCategory(
-      draggedCategory || event.dataTransfer.getData('text/plain'),
-    )
+    const nextSourceCategory = cleanCategory(sourceCategory)
     const nextTargetCategory = cleanCategory(targetCategory)
 
-    resetCategoryDragState()
-
     if (
-      !sourceCategory ||
+      !nextSourceCategory ||
       !nextTargetCategory ||
-      sourceCategory === nextTargetCategory
+      nextSourceCategory === nextTargetCategory
     ) {
-      return
+      return false
     }
 
-    if (getCategoryParent(sourceCategory) !== getCategoryParent(nextTargetCategory)) {
+    if (
+      getCategoryParent(nextSourceCategory) !==
+      getCategoryParent(nextTargetCategory)
+    ) {
       notify('只能在同级分类之间排序')
-      return
+      return false
     }
 
     setCategories((currentCategories) => {
@@ -2042,10 +2117,10 @@ function App() {
         ...cards.map((card) => card.category),
       ])
       const sourceBlock = nextCategories.filter((item) =>
-        isCategoryWithin(item, sourceCategory),
+        isCategoryWithin(item, nextSourceCategory),
       )
       const withoutSourceBlock = nextCategories.filter(
-        (item) => !isCategoryWithin(item, sourceCategory),
+        (item) => !isCategoryWithin(item, nextSourceCategory),
       )
       const targetIndexes = withoutSourceBlock
         .map((item, index) =>
@@ -2069,6 +2144,194 @@ function App() {
       ])
     })
     notify('分类顺序已更新')
+    return true
+  }
+
+  function getCategoryDropTargetFromPoint(clientX: number, clientY: number) {
+    const element = document.elementFromPoint(clientX, clientY)
+    const row =
+      element instanceof HTMLElement
+        ? element.closest<HTMLElement>('[data-category-drop-target]')
+        : null
+    const targetCategory = row?.dataset.categoryDropTarget
+
+    if (!row || !targetCategory) {
+      return null
+    }
+
+    const bounds = row.getBoundingClientRect()
+    const position: CategoryDropPosition =
+      clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'
+
+    return {
+      position,
+      targetCategory,
+    }
+  }
+
+  function hoverCategoryDrop(
+    event: DragEvent<HTMLDivElement>,
+    targetCategory: string,
+    position: CategoryDropPosition,
+  ) {
+    const sourceCategory = cleanCategory(draggedCategory)
+
+    if (!previewCategoryDrop(sourceCategory, targetCategory, position)) {
+      return
+    }
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+  }
+
+  function dropCategoryOnCategory(
+    event: DragEvent<HTMLDivElement>,
+    targetCategory: string,
+    position: CategoryDropPosition,
+  ) {
+    event.preventDefault()
+
+    const sourceCategory = cleanCategory(
+      draggedCategory || event.dataTransfer.getData('text/plain'),
+    )
+
+    resetCategoryDragState()
+    reorderCategory(sourceCategory, targetCategory, position)
+  }
+
+  function startCategoryLongPress(
+    event: PointerEvent<HTMLDivElement>,
+    categoryPath: string,
+  ) {
+    const target = event.target
+
+    if (
+      !isEditMode ||
+      (event.pointerType === 'mouse' && event.button !== 0) ||
+      (target instanceof HTMLElement &&
+        target.closest('[data-category-action="true"]'))
+    ) {
+      return
+    }
+
+    const nextCategory = cleanCategory(categoryPath)
+
+    if (!nextCategory) {
+      return
+    }
+
+    clearCategoryPressTimer()
+    categoryPointerDragRef.current = {
+      category: nextCategory,
+      isReady: false,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    }
+    setPressingCategory(nextCategory)
+    setDragReadyCategory('')
+    setDropCategory('')
+    setDropPosition(null)
+
+    event.currentTarget.setPointerCapture(event.pointerId)
+
+    categoryPressTimerRef.current = window.setTimeout(() => {
+      const currentDrag = categoryPointerDragRef.current
+
+      if (
+        !currentDrag ||
+        currentDrag.pointerId !== event.pointerId ||
+        currentDrag.category !== nextCategory
+      ) {
+        return
+      }
+
+      currentDrag.isReady = true
+      dragCategory(nextCategory)
+      setDragReadyCategory(nextCategory)
+      notify('拖动排序已解锁，移动后松手')
+      navigator.vibrate?.(30)
+    }, 2000)
+  }
+
+  function moveLongPressedCategory(event: PointerEvent<HTMLDivElement>) {
+    const currentDrag = categoryPointerDragRef.current
+
+    if (!currentDrag || currentDrag.pointerId !== event.pointerId) {
+      return
+    }
+
+    if (!currentDrag.isReady) {
+      const distance = Math.hypot(
+        event.clientX - currentDrag.startX,
+        event.clientY - currentDrag.startY,
+      )
+
+      if (distance > 10) {
+        cancelCategoryLongPress(event)
+      }
+      return
+    }
+
+    event.preventDefault()
+
+    const target = getCategoryDropTargetFromPoint(event.clientX, event.clientY)
+
+    if (!target) {
+      setDropCategory('')
+      setDropPosition(null)
+      return
+    }
+
+    previewCategoryDrop(
+      currentDrag.category,
+      target.targetCategory,
+      target.position,
+    )
+  }
+
+  function finishLongPressedCategory(event: PointerEvent<HTMLDivElement>) {
+    const currentDrag = categoryPointerDragRef.current
+
+    if (!currentDrag || currentDrag.pointerId !== event.pointerId) {
+      return
+    }
+
+    clearCategoryPressTimer()
+
+    if (currentDrag.isReady) {
+      event.preventDefault()
+      suppressCategoryClickRef.current = currentDrag.category
+
+      const target = getCategoryDropTargetFromPoint(event.clientX, event.clientY)
+
+      if (target) {
+        reorderCategory(
+          currentDrag.category,
+          target.targetCategory,
+          target.position,
+        )
+      }
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    resetCategoryLongPressState()
+  }
+
+  function cancelCategoryLongPress(event?: PointerEvent<HTMLDivElement>) {
+    if (
+      event &&
+      categoryPointerDragRef.current &&
+      categoryPointerDragRef.current.pointerId === event.pointerId
+    ) {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+    }
+
+    resetCategoryLongPressState()
   }
 
   function moveCardsFromManagedCategory() {
@@ -2353,6 +2616,11 @@ function App() {
   }
 
   function jumpToCategory(nextCategory: string) {
+    if (suppressCategoryClickRef.current === nextCategory) {
+      suppressCategoryClickRef.current = ''
+      return
+    }
+
     const jump = () => {
       const targetCategory =
         categoryPaths.find((item) => item.category === nextCategory)?.category ||
@@ -2847,16 +3115,20 @@ function App() {
                   onCreateChild={(parentCategory) =>
                     openCategoryCreator(parentCategory, 'card')
                   }
-                  onDragEnd={resetCategoryDragState}
                   onDragLeave={() => {
                     setDropCategory('')
                     setDropPosition(null)
                   }}
                   onDragOver={hoverCategoryDrop}
-                  onDragStart={dragCategory}
                   onDrop={dropCategoryOnCategory}
                   onJump={jumpToCategory}
+                  onPointerCancel={cancelCategoryLongPress}
+                  onPointerDown={startCategoryLongPress}
+                  onPointerMove={moveLongPressedCategory}
+                  onPointerUp={finishLongPressedCategory}
                   onRename={openRenameCategoryDialog}
+                  pressingCategory={pressingCategory}
+                  dragReadyCategory={dragReadyCategory}
                 />
               </CardContent>
             </Card>
