@@ -2769,13 +2769,20 @@ function App() {
           </div>
         ) : null}
 
-        <section
-          className={`grid gap-5 ${
-            isEditMode
-              ? 'lg:grid-cols-[260px_320px_minmax(0,1fr)]'
-              : 'lg:grid-cols-[260px_minmax(0,1fr)]'
-          }`}
-        >
+        {!stateLoaded ? (
+          <Card className="flex min-h-72 items-center justify-center bg-card/80 backdrop-blur-xl">
+            <CardContent className="pt-5 text-center text-sm text-muted-foreground">
+              正在加载服务器存档...
+            </CardContent>
+          </Card>
+        ) : (
+          <section
+            className={`grid gap-5 ${
+              isEditMode
+                ? 'lg:grid-cols-[260px_320px_minmax(0,1fr)]'
+                : 'lg:grid-cols-[260px_minmax(0,1fr)]'
+            }`}
+          >
           <aside className="min-w-0">
             <Card className="sticky top-28 bg-card/80 backdrop-blur-xl">
               <CardHeader>
@@ -3148,7 +3155,8 @@ function App() {
               </Card>
             )}
           </section>
-        </section>
+          </section>
+        )}
       </div>
 
       <Dialog
