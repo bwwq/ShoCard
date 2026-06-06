@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 97%;
+    --foreground: 0 0% 7%;
+    --card: 0 0% 99%;
+    --card-foreground: 0 0% 7%;
+    --primary: 0 0% 8%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 93%;
+    --secondary-foreground: 0 0% 8%;
+    --muted: 0 0% 94%;
+    --muted-foreground: 0 0% 42%;
+    --accent: 0 0% 91%;
+    --accent-foreground: 0 0% 8%;
+    --destructive: 0 0% 12%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 84%;
+    --input: 0 0% 86%;
+    --ring: 0 0% 18%;
+    --shadow-soft: 0 18px 45px rgba(0, 0, 0, 0.08);
+    --shadow-hairline: 0 0 0 1px rgba(0, 0, 0, 0.04);
+  }
+
+  .dark {
+    --background: 0 0% 7%;
+    --foreground: 0 0% 94%;
+    --card: 0 0% 12%;
+    --card-foreground: 0 0% 94%;
+    --primary: 0 0% 92%;
+    --primary-foreground: 0 0% 8%;
+    --secondary: 0 0% 17%;
+    --secondary-foreground: 0 0% 94%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 67%;
+    --accent: 0 0% 19%;
+    --accent-foreground: 0 0% 94%;
+    --destructive: 0 0% 86%;
+    --destructive-foreground: 0 0% 8%;
+    --border: 0 0% 24%;
+    --input: 0 0% 25%;
+    --ring: 0 0% 76%;
+    --shadow-soft: 0 22px 55px rgba(0, 0, 0, 0.42);
+    --shadow-hairline: 0 0 0 1px rgba(255, 255, 255, 0.05);
+  }
+
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    background: hsl(var(--background));
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    min-width: 320px;
+    min-height: 100vh;
+    margin: 0;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family:
+      -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI',
+      system-ui, sans-serif;
+    letter-spacing: 0;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+    letter-spacing: 0;
+  }
+
+  a {
+    color: inherit;
+  }
+}
