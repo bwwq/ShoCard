@@ -115,12 +115,28 @@ type CropRect = {
 
 type CropTarget = 'card' | 'edit'
 
+type AppState = {
+  cards: TavernCard[]
+  categories: string[]
+  siteTitle: string
+}
+
+type AuthStatus = {
+  configured: boolean
+  isAdmin: boolean
+  setupAllowed: boolean
+}
+
+type ApiRequestError = Error & {
+  status?: number
+}
+
 const STORAGE_KEY = 'dc-tavern-cards:v1'
 const CATEGORY_STORAGE_KEY = 'dc-tavern-categories:v1'
 const THEME_KEY = 'dc-tavern-theme:v1'
 const SITE_TITLE_KEY = 'dc-tavern-site-title:v1'
-const ADMIN_SESSION_KEY = 'dc-tavern-admin-session:v1'
-const ADMIN_CREDENTIAL_KEY = 'dc-tavern-admin-credential:v1'
+const LEGACY_ADMIN_SESSION_KEY = 'dc-tavern-admin-session:v1'
+const LEGACY_ADMIN_CREDENTIAL_KEY = 'dc-tavern-admin-credential:v1'
 const DEFAULT_SITE_TITLE = 'DC 酒馆卡展示'
 const ALL_CATEGORY = '全部'
 const DEFAULT_CATEGORY = ''
@@ -540,7 +556,7 @@ function migrateStoredCard(value: unknown): TavernCard | null {
   }
 }
 
-function getInitialCards() {
+function getLegacyCards() {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
     if (!stored) {
@@ -570,7 +586,7 @@ function uniqueCategories(values: string[]) {
   )
 }
 
-function getInitialCategories(cards: TavernCard[]) {
+function getLegacyCategories(cards: TavernCard[]) {
   try {
     const stored = window.localStorage.getItem(CATEGORY_STORAGE_KEY)
     const parsed = stored ? (JSON.parse(stored) as unknown[]) : []
@@ -600,63 +616,140 @@ function getInitialTheme(): ThemeMode {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
-function getInitialSiteTitle() {
+function getLegacySiteTitle() {
   try {
     const stored = window.localStorage.getItem(SITE_TITLE_KEY)?.trim()
 
-    return stored || DEFAULT_SITE_TITLE
+    return stored || ''
   } catch {
-    return DEFAULT_SITE_TITLE
+    return ''
   }
 }
 
-function getStoredAdminCredential() {
-  try {
-    const stored = window.localStorage.getItem(ADMIN_CREDENTIAL_KEY)
-    const parsed = stored ? (JSON.parse(stored) as unknown) : null
-    const credential = parsed as Partial<{
-      account: string
-      password: string
-    }> | null
+function getLegacyState(): AppState | null {
+  const cards = getLegacyCards()
+  const categories = getLegacyCategories(cards)
+  const siteTitle = getLegacySiteTitle()
 
-    if (
-      credential &&
-      typeof credential.account === 'string' &&
-      typeof credential.password === 'string' &&
-      credential.account.trim() &&
-      credential.password
-    ) {
-      return {
-        account: credential.account.trim(),
-        password: credential.password,
-      }
-    }
-  } catch {
+  if (!cards.length && !categories.length && !siteTitle) {
     return null
   }
 
-  return null
+  return {
+    cards,
+    categories,
+    siteTitle: siteTitle || DEFAULT_SITE_TITLE,
+  }
 }
 
-function getInitialAdmin() {
-  const localHosts = new Set(['localhost', '127.0.0.1', '::1'])
-
-  if (localHosts.has(window.location.hostname)) {
-    return true
-  }
-
+function clearLegacyState() {
   try {
-    const hasCredential = Boolean(getStoredAdminCredential())
-
-    if (!hasCredential) {
-      window.localStorage.removeItem(ADMIN_SESSION_KEY)
-      return false
-    }
-
-    return window.localStorage.getItem(ADMIN_SESSION_KEY) === 'active'
+    window.localStorage.removeItem(STORAGE_KEY)
+    window.localStorage.removeItem(CATEGORY_STORAGE_KEY)
+    window.localStorage.removeItem(SITE_TITLE_KEY)
+    window.localStorage.removeItem(LEGACY_ADMIN_SESSION_KEY)
+    window.localStorage.removeItem(LEGACY_ADMIN_CREDENTIAL_KEY)
   } catch {
-    return false
+    return
   }
+}
+
+function clearLegacyAdminAuth() {
+  try {
+    window.localStorage.removeItem(LEGACY_ADMIN_SESSION_KEY)
+    window.localStorage.removeItem(LEGACY_ADMIN_CREDENTIAL_KEY)
+  } catch {
+    return
+  }
+}
+
+function getStatePayload(cards: TavernCard[], categories: string[], siteTitle: string) {
+  return {
+    cards,
+    categories: uniqueCategories([
+      ...categories,
+      ...cards.map((card) => card.category),
+    ]),
+    siteTitle: siteTitle.trim() || DEFAULT_SITE_TITLE,
+  }
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers || {}),
+    },
+  })
+  const payload = (await response.json().catch(() => null)) as
+    | { message?: string }
+    | T
+    | null
+
+  if (!response.ok) {
+    const error = new Error(
+      payload &&
+        typeof payload === 'object' &&
+        'message' in payload &&
+        payload.message
+        ? payload.message
+        : '请求失败',
+    ) as ApiRequestError
+    error.status = response.status
+    throw error
+  }
+
+  return payload as T
+}
+
+function loadServerState() {
+  return requestJson<AppState>('/api/state')
+}
+
+function saveServerState(state: AppState) {
+  return requestJson<AppState>('/api/state', {
+    body: JSON.stringify(state),
+    method: 'PUT',
+  })
+}
+
+function loadAuthStatus() {
+  return requestJson<AuthStatus>('/api/auth/status')
+}
+
+function loginAdmin(account: string, password: string) {
+  return requestJson<AuthStatus>('/api/auth/login', {
+    body: JSON.stringify({ account, password }),
+    method: 'POST',
+  })
+}
+
+function logoutAdmin() {
+  return requestJson<AuthStatus>('/api/auth/logout', {
+    body: JSON.stringify({}),
+    method: 'POST',
+  })
+}
+
+function shouldMigrateLegacyState(serverState: AppState, legacyState: AppState | null) {
+  return (
+    Boolean(legacyState) &&
+    !serverState.cards.length &&
+    !serverState.categories.length &&
+    serverState.siteTitle === DEFAULT_SITE_TITLE
+  )
+}
+
+async function publishLegacyState(serverState: AppState) {
+  const legacyState = getLegacyState()
+
+  if (!shouldMigrateLegacyState(serverState, legacyState)) {
+    return null
+  }
+
+  return saveServerState(legacyState!)
 }
 
 function categoryElementId(category: string) {
@@ -1314,19 +1407,18 @@ function TavernCardItem({
 }
 
 function App() {
-  const [cards, setCards] = useState<TavernCard[]>(getInitialCards)
-  const [categories, setCategories] = useState(() => getInitialCategories(cards))
+  const [cards, setCards] = useState<TavernCard[]>([])
+  const [categories, setCategories] = useState<string[]>([])
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme)
-  const [siteTitle, setSiteTitle] = useState(getInitialSiteTitle)
+  const [siteTitle, setSiteTitle] = useState(DEFAULT_SITE_TITLE)
   const [siteTitleDialogOpen, setSiteTitleDialogOpen] = useState(false)
   const [siteTitleDraft, setSiteTitleDraft] = useState('')
   const [siteTitleError, setSiteTitleError] = useState('')
-  const [isAdmin, setIsAdmin] = useState(getInitialAdmin)
+  const [isAdmin, setIsAdmin] = useState(false)
   const [isEditMode, setIsEditMode] = useState(false)
   const [adminDialogOpen, setAdminDialogOpen] = useState(false)
-  const [adminConfigured, setAdminConfigured] = useState(() =>
-    Boolean(getStoredAdminCredential()),
-  )
+  const [adminConfigured, setAdminConfigured] = useState(true)
+  const [adminSetupAllowed, setAdminSetupAllowed] = useState(false)
   const [adminAccount, setAdminAccount] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
   const [adminError, setAdminError] = useState('')
@@ -1387,16 +1479,15 @@ function App() {
   )
   const [editRecommended, setEditRecommended] = useState(false)
   const [editFormError, setEditFormError] = useState('')
+  const [stateLoaded, setStateLoaded] = useState(false)
+  const [stateError, setStateError] = useState('')
+  const [isSavingState, setIsSavingState] = useState(false)
+  const [legacyStateAvailable, setLegacyStateAvailable] = useState(() =>
+    Boolean(getLegacyState()),
+  )
+  const lastSavedStateRef = useRef('')
   const titleTapCountRef = useRef(0)
   const titleTapTimerRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cards))
-  }, [cards])
-
-  useEffect(() => {
-    window.localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(categories))
-  }, [categories])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
@@ -1406,8 +1497,90 @@ function App() {
 
   useEffect(() => {
     document.title = siteTitle
-    window.localStorage.setItem(SITE_TITLE_KEY, siteTitle)
   }, [siteTitle])
+
+  useEffect(() => {
+    let cancelled = false
+    clearLegacyAdminAuth()
+
+    async function loadInitialData() {
+      try {
+        const [serverState, authStatus] = await Promise.all([
+          loadServerState(),
+          loadAuthStatus(),
+        ])
+
+        if (cancelled) {
+          return
+        }
+
+        const nextState = getStatePayload(
+          serverState.cards,
+          serverState.categories,
+          serverState.siteTitle,
+        )
+        setCards(nextState.cards)
+        setCategories(nextState.categories)
+        setSiteTitle(nextState.siteTitle)
+        setIsAdmin(authStatus.isAdmin)
+        setAdminConfigured(authStatus.configured)
+        setAdminSetupAllowed(authStatus.setupAllowed)
+        setStateError('')
+        setStateLoaded(true)
+        lastSavedStateRef.current = JSON.stringify(nextState)
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+
+        setStateError(error instanceof Error ? error.message : '无法加载服务器存档')
+        setStateLoaded(true)
+      }
+    }
+
+    loadInitialData()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!stateLoaded || !isAdmin) {
+      return
+    }
+
+    const nextState = getStatePayload(cards, categories, siteTitle)
+    const serializedState = JSON.stringify(nextState)
+
+    if (serializedState === lastSavedStateRef.current) {
+      return
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        setIsSavingState(true)
+        await saveServerState(nextState)
+        lastSavedStateRef.current = serializedState
+        setStateError('')
+      } catch (error) {
+        const apiError = error as ApiRequestError
+
+        if (apiError.status === 401) {
+          setIsAdmin(false)
+          setIsEditMode(false)
+          setEditingCard(null)
+          setNotice('Admin 会话已失效，请重新登录')
+        }
+
+        setStateError(error instanceof Error ? error.message : '保存服务器存档失败')
+      } finally {
+        setIsSavingState(false)
+      }
+    }, 300)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [cards, categories, isAdmin, siteTitle, stateLoaded])
 
   useEffect(() => {
     return () => {
@@ -2022,7 +2195,7 @@ function App() {
     }
   }
 
-  function enterAdmin(event: FormEvent<HTMLFormElement>) {
+  async function enterAdmin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const nextAccount = adminAccount.trim()
 
@@ -2031,41 +2204,99 @@ function App() {
       return
     }
 
-    const credential = getStoredAdminCredential()
+    try {
+      const authStatus = await loginAdmin(nextAccount, adminPassword)
+      let nextState = getStatePayload(cards, categories, siteTitle)
+      const migratedState = await publishLegacyState(nextState)
 
-    if (!credential) {
-      window.localStorage.setItem(
-        ADMIN_CREDENTIAL_KEY,
-        JSON.stringify({
-          account: nextAccount,
-          password: adminPassword,
-        }),
-      )
-      setAdminConfigured(true)
-    } else if (
-      nextAccount !== credential.account ||
-      adminPassword !== credential.password
-    ) {
-      setAdminError('账号或密码不正确')
+      if (migratedState) {
+        nextState = getStatePayload(
+          migratedState.cards,
+          migratedState.categories,
+          migratedState.siteTitle,
+        )
+        setCards(nextState.cards)
+        setCategories(nextState.categories)
+        setSiteTitle(nextState.siteTitle)
+        lastSavedStateRef.current = JSON.stringify(nextState)
+        clearLegacyState()
+        setLegacyStateAvailable(false)
+      }
+
+      setIsAdmin(authStatus.isAdmin)
+      setIsEditMode(false)
+      setAdminConfigured(authStatus.configured)
+      setAdminSetupAllowed(authStatus.setupAllowed)
+      setAdminDialogOpen(false)
+      setAdminAccount('')
+      setAdminPassword('')
+      setAdminError('')
+      notify(migratedState ? '已恢复本地存档到服务器' : '已进入 admin 浏览模式')
+    } catch (error) {
+      setAdminError(error instanceof Error ? error.message : '登录失败')
       return
     }
-
-    setIsAdmin(true)
-    setIsEditMode(false)
-    setAdminDialogOpen(false)
-    setAdminAccount('')
-    setAdminPassword('')
-    setAdminError('')
-    window.localStorage.setItem(ADMIN_SESSION_KEY, 'active')
-    notify(credential ? '已进入 admin 浏览模式' : '已创建 admin')
   }
 
-  function leaveAdmin() {
+  async function leaveAdmin() {
+    try {
+      const authStatus = await logoutAdmin()
+      setAdminConfigured(authStatus.configured)
+      setAdminSetupAllowed(authStatus.setupAllowed)
+    } catch {
+      // Keep local logout responsive even if the network is unhappy.
+    }
+
     setIsAdmin(false)
     setIsEditMode(false)
     setEditingCard(null)
-    window.localStorage.removeItem(ADMIN_SESSION_KEY)
     notify('已退出 admin')
+  }
+
+  async function restoreLegacyStateToServer() {
+    if (!isAdmin) {
+      notify('请先进入 admin')
+      return
+    }
+
+    const legacyState = getLegacyState()
+
+    if (!legacyState) {
+      setLegacyStateAvailable(false)
+      notify('没有可恢复的本地存档')
+      return
+    }
+
+    try {
+      setIsSavingState(true)
+      const restoredState = await saveServerState(legacyState)
+      const nextState = getStatePayload(
+        restoredState.cards,
+        restoredState.categories,
+        restoredState.siteTitle,
+      )
+      setCards(nextState.cards)
+      setCategories(nextState.categories)
+      setSiteTitle(nextState.siteTitle)
+      lastSavedStateRef.current = JSON.stringify(nextState)
+      clearLegacyState()
+      setLegacyStateAvailable(false)
+      setStateError('')
+      notify('已恢复本地存档到服务器')
+    } catch (error) {
+      const apiError = error as ApiRequestError
+
+      if (apiError.status === 401) {
+        setIsAdmin(false)
+        setIsEditMode(false)
+        setEditingCard(null)
+      }
+
+      setStateError(error instanceof Error ? error.message : '恢复本地存档失败')
+      notify('恢复本地存档失败')
+    } finally {
+      setIsSavingState(false)
+    }
   }
 
   function handleTitleTap() {
@@ -2529,6 +2760,15 @@ function App() {
           </div>
         </header>
 
+        {!stateLoaded || stateError || isSavingState ? (
+          <div
+            className="rounded-md border border-border bg-card/80 px-3 py-2 text-sm text-muted-foreground shadow-hairline"
+            role={stateError ? 'alert' : 'status'}
+          >
+            {stateError || (isSavingState ? '正在保存服务器存档...' : '正在加载服务器存档...')}
+          </div>
+        ) : null}
+
         <section
           className={`grid gap-5 ${
             isEditMode
@@ -2642,6 +2882,17 @@ function App() {
                     <Folder />
                     创建根分类
                   </Button>
+                  {legacyStateAvailable ? (
+                    <Button
+                      className="h-11 w-full justify-start"
+                      type="button"
+                      variant="secondary"
+                      onClick={restoreLegacyStateToServer}
+                    >
+                      <RotateCcw />
+                      恢复本地存档
+                    </Button>
+                  ) : null}
                   <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-3">
                     <label className="block space-y-2 text-sm font-medium">
                       <span>当前目录</span>
@@ -2913,12 +3164,24 @@ function App() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{adminConfigured ? 'Admin' : '设置 Admin'}</DialogTitle>
+            <DialogTitle>
+              {adminConfigured || !adminSetupAllowed ? 'Admin' : '设置 Admin'}
+            </DialogTitle>
             <DialogDescription className="sr-only">
-              {adminConfigured ? 'Admin 会话登录' : '创建本地 admin 账号'}
+              {adminConfigured
+                ? '服务端 Admin 会话登录'
+                : '创建服务端 Admin 账号'}
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={enterAdmin}>
+            {!adminConfigured && !adminSetupAllowed ? (
+              <p
+                className="rounded-md border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground"
+                role="alert"
+              >
+                服务端还没有配置 ADMIN_ACCOUNT / ADMIN_PASSWORD。
+              </p>
+            ) : null}
             <label className="block space-y-2 text-sm font-medium">
               <span>账号</span>
               <Input
@@ -2956,7 +3219,7 @@ function App() {
               </Button>
               <Button type="submit">
                 <Lock />
-                {adminConfigured ? '进入' : '创建'}
+                {adminConfigured || !adminSetupAllowed ? '进入' : '创建'}
               </Button>
             </div>
           </form>

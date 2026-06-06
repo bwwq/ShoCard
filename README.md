@@ -19,7 +19,25 @@ APP_PORT=8088 ./deploy.sh restart
 ./deploy.sh stop
 ```
 
-The script builds and starts a Docker container for the Vite app. If Docker is not installed, it will try to install Docker on common `apt`, `dnf`, or `yum` based Linux systems.
+The script builds and starts a Docker container for the app. The container serves the built React UI and a small same-origin Node API.
+
+Server data is stored in the Docker volume `app-data` at `/app/data`. Public visitors read `/api/state`; only an authenticated admin session can write it.
+
+Admin credentials are read from `.env`:
+
+```bash
+ADMIN_ACCOUNT=admin
+ADMIN_PASSWORD=change-this
+ALLOW_FIRST_ADMIN_SETUP=false
+```
+
+When `ADMIN_PASSWORD` is empty, `deploy.sh` generates one and writes it into `.env`. Keep that file private.
+
+### Recover old browser localStorage data
+
+If the old site already has cards in browser `localStorage`, deploy this version to the same origin, open that same URL in the browser that contains the old data, then log in as admin. If the server state is empty, the app automatically publishes the old cards, categories, and title to the server and clears those old content keys from `localStorage`.
+
+If the server is not empty but you still want to restore the old browser data, enter admin edit mode and click `恢复本地存档`.
 
 # React + TypeScript + Vite
 

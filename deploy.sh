@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_PORT="${APP_PORT:-8080}"
+REQUESTED_APP_PORT="${APP_PORT:-}"
+APP_PORT="${REQUESTED_APP_PORT}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 ENV_FILE="${ENV_FILE:-.env}"
-export APP_PORT
 
 usage() {
   cat <<'EOF'
@@ -20,6 +20,8 @@ Environment:
   APP_PORT=8080            Host port mapped to container port 4173
   IMAGE_NAME=...           Docker image name
   CONTAINER_NAME=...       Docker container name
+  ADMIN_ACCOUNT=admin      Admin account name
+  ADMIN_PASSWORD=...       Admin password, generated in .env when empty
 
 Examples:
   APP_PORT=80 ./deploy.sh
@@ -34,6 +36,51 @@ log() {
 die() {
   printf '[deploy] error: %s\n' "$*" >&2
   exit 1
+}
+
+random_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 24
+    return
+  fi
+
+  if command -v od >/dev/null 2>&1; then
+    od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
+    return
+  fi
+
+  date +%s%N
+}
+
+get_env_value() {
+  local key="$1"
+  if ! grep -q "^${key}=" "$ENV_FILE"; then
+    return
+  fi
+
+  grep "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-
+}
+
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local tmp_file="${ENV_FILE}.tmp.$$"
+
+  awk -v key="$key" -v value="$value" '
+    BEGIN { written = 0 }
+    $0 ~ "^" key "=" {
+      print key "=" value
+      written = 1
+      next
+    }
+    { print }
+    END {
+      if (!written) {
+        print key "=" value
+      }
+    }
+  ' "$ENV_FILE" >"$tmp_file"
+  mv "$tmp_file" "$ENV_FILE"
 }
 
 run_as_root() {
@@ -111,8 +158,30 @@ prepare_env() {
     log "created $ENV_FILE"
   fi
 
-  if ! grep -q '^APP_PORT=' "$ENV_FILE"; then
-    printf 'APP_PORT=%s\n' "$APP_PORT" >>"$ENV_FILE"
+  if [ -n "$REQUESTED_APP_PORT" ]; then
+    set_env_value APP_PORT "$REQUESTED_APP_PORT"
+  elif ! grep -q '^APP_PORT=' "$ENV_FILE"; then
+    printf 'APP_PORT=8080\n' >>"$ENV_FILE"
+  fi
+
+  APP_PORT="$(get_env_value APP_PORT)"
+  if [ -z "$APP_PORT" ]; then
+    APP_PORT=8080
+    set_env_value APP_PORT "$APP_PORT"
+  fi
+  export APP_PORT
+
+  if ! grep -q '^ADMIN_ACCOUNT=' "$ENV_FILE"; then
+    printf 'ADMIN_ACCOUNT=admin\n' >>"$ENV_FILE"
+  fi
+
+  if [ -z "$(get_env_value ADMIN_PASSWORD)" ]; then
+    set_env_value ADMIN_PASSWORD "$(random_secret)"
+    log "generated ADMIN_PASSWORD in $ENV_FILE"
+  fi
+
+  if ! grep -q '^ALLOW_FIRST_ADMIN_SETUP=' "$ENV_FILE"; then
+    printf 'ALLOW_FIRST_ADMIN_SETUP=false\n' >>"$ENV_FILE"
   fi
 }
 

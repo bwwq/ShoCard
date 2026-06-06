@@ -5,12 +5,22 @@ services:
       dockerfile: Dockerfile
     image: ${IMAGE_NAME:-dc-tavern-card-showcase:latest}
     container_name: ${CONTAINER_NAME:-dc-tavern-card-showcase}
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+      PORT: 4173
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8080}:4173"
+    volumes:
+      - app-data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4173/ >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4173/api/state >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  app-data:
