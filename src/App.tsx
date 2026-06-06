@@ -1,5 +1,6 @@
 import {
   type ChangeEvent,
+  type DragEvent,
   type FormEvent,
   type PointerEvent,
   useEffect,
@@ -14,6 +15,7 @@ import {
   Crop as CropIcon,
   Eye,
   Folder,
+  GripVertical,
   Image as ImageIcon,
   Import,
   Link as LinkIcon,
@@ -96,6 +98,8 @@ type CategoryNode = {
   name: string
   path: string
 }
+
+type CategoryDropPosition = 'before' | 'after'
 
 type AddCardsResult = {
   count: number
@@ -180,6 +184,26 @@ function isCategoryWithin(category: string, parentCategory: string) {
     nextCategory === nextParentCategory ||
     nextCategory.startsWith(`${nextParentCategory}/`)
   )
+}
+
+function replaceCategoryPath(
+  category: string,
+  sourceCategory: string,
+  targetCategory: string,
+) {
+  const nextCategory = cleanCategory(category)
+  const nextSourceCategory = cleanCategory(sourceCategory)
+  const nextTargetCategory = cleanCategory(targetCategory)
+
+  if (!nextSourceCategory || !isCategoryWithin(nextCategory, nextSourceCategory)) {
+    return nextCategory
+  }
+
+  if (nextCategory === nextSourceCategory) {
+    return nextTargetCategory
+  }
+
+  return `${nextTargetCategory}${nextCategory.slice(nextSourceCategory.length)}`
 }
 
 function formatCategoryLabel(category: string) {
@@ -701,33 +725,113 @@ function buildCategoryTree(categories: string[], cards: TavernCard[]): CategoryN
 
 type CategoryTreeProps = {
   activeCategory: string
+  draggedCategory: string
   depth?: number
+  dropCategory: string
+  dropPosition: CategoryDropPosition | null
   isEditMode: boolean
   nodes: CategoryNode[]
   onCreateChild: (parentCategory: string) => void
+  onDragEnd: () => void
+  onDragLeave: () => void
+  onDragOver: (
+    event: DragEvent<HTMLDivElement>,
+    targetCategory: string,
+    position: CategoryDropPosition,
+  ) => void
+  onDragStart: (category: string) => void
+  onDrop: (
+    event: DragEvent<HTMLDivElement>,
+    targetCategory: string,
+    position: CategoryDropPosition,
+  ) => void
   onJump: (category: string) => void
+  onRename: (category: string) => void
 }
 
 function CategoryTree({
   activeCategory,
+  draggedCategory,
   depth = 0,
+  dropCategory,
+  dropPosition,
   isEditMode,
   nodes,
   onCreateChild,
+  onDragEnd,
+  onDragLeave,
+  onDragOver,
+  onDragStart,
+  onDrop,
   onJump,
+  onRename,
 }: CategoryTreeProps) {
   return (
     <div className="space-y-1">
       {nodes.map((node) => (
-        <div key={node.path} className="space-y-1">
-          <div className="flex items-center gap-1">
+        <div
+          key={node.path}
+          className={`space-y-1 rounded-md ${
+            draggedCategory === node.path ? 'opacity-50' : ''
+          }`}
+        >
+          <div
+            className={`flex items-center gap-1 rounded-md ${
+              dropCategory === node.path && dropPosition
+                ? 'ring-2 ring-ring'
+                : ''
+            }`}
+            onDragLeave={isEditMode ? onDragLeave : undefined}
+            onDragOver={
+              isEditMode
+                ? (event) => {
+                    const bounds = event.currentTarget.getBoundingClientRect()
+                    const position =
+                      event.clientY < bounds.top + bounds.height / 2
+                        ? 'before'
+                        : 'after'
+                    onDragOver(event, node.path, position)
+                  }
+                : undefined
+            }
+            onDrop={
+              isEditMode
+                ? (event) => {
+                    const bounds = event.currentTarget.getBoundingClientRect()
+                    const position =
+                      event.clientY < bounds.top + bounds.height / 2
+                        ? 'before'
+                        : 'after'
+                    onDrop(event, node.path, position)
+                  }
+                : undefined
+            }
+          >
+            {isEditMode ? (
+              <button
+                aria-label={`拖动 ${node.path}`}
+                className="flex size-10 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground transition-colors active:cursor-grabbing hover:bg-accent hover:text-accent-foreground"
+                draggable
+                title="拖动排序"
+                type="button"
+                style={{ marginLeft: depth * 14 }}
+                onDragEnd={onDragEnd}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.setData('text/plain', node.path)
+                  onDragStart(node.path)
+                }}
+              >
+                <GripVertical className="size-4" />
+              </button>
+            ) : null}
             <button
               className={`flex h-10 min-w-0 flex-1 items-center justify-between gap-3 rounded-md pr-3 text-left text-sm transition-colors ${
                 activeCategory === node.path
                   ? 'bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
               }`}
-              style={{ paddingLeft: 12 + depth * 14 }}
+              style={{ paddingLeft: isEditMode ? 12 : 12 + depth * 14 }}
               type="button"
               onClick={() => onJump(node.path)}
             >
@@ -738,25 +842,45 @@ function CategoryTree({
               <span className="shrink-0">{node.count}</span>
             </button>
             {isEditMode ? (
-              <button
-                aria-label={`创建 ${node.path} 的子分类`}
-                className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                title="创建子分类"
-                type="button"
-                onClick={() => onCreateChild(node.path)}
-              >
-                <Plus className="size-4" />
-              </button>
+              <>
+                <button
+                  aria-label={`重命名 ${node.path}`}
+                  className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  title="重命名分类"
+                  type="button"
+                  onClick={() => onRename(node.path)}
+                >
+                  <Pencil className="size-4" />
+                </button>
+                <button
+                  aria-label={`创建 ${node.path} 的子分类`}
+                  className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  title="创建子分类"
+                  type="button"
+                  onClick={() => onCreateChild(node.path)}
+                >
+                  <Plus className="size-4" />
+                </button>
+              </>
             ) : null}
           </div>
           {node.children.length ? (
             <CategoryTree
               activeCategory={activeCategory}
+              draggedCategory={draggedCategory}
               depth={depth + 1}
+              dropCategory={dropCategory}
+              dropPosition={dropPosition}
               isEditMode={isEditMode}
               nodes={node.children}
               onCreateChild={onCreateChild}
+              onDragEnd={onDragEnd}
+              onDragLeave={onDragLeave}
+              onDragOver={onDragOver}
+              onDragStart={onDragStart}
+              onDrop={onDrop}
               onJump={onJump}
+              onRename={onRename}
             />
           ) : null}
         </div>
@@ -1108,7 +1232,7 @@ function TavernCardItem({
   onOpenEditor,
 }: TavernCardItemProps) {
   return (
-    <Card className="mb-4 inline-block w-full break-inside-avoid overflow-hidden bg-card/90 transition-transform duration-200 hover:-translate-y-0.5">
+    <Card className="flex h-full min-w-0 flex-col overflow-hidden bg-card/90 transition-transform duration-200 hover:-translate-y-0.5">
       {card.imageUrl ? (
         <CroppedImage
           className="border-b border-border"
@@ -1211,6 +1335,15 @@ function App() {
   const [categoryParent, setCategoryParent] = useState('')
   const [categoryTarget, setCategoryTarget] =
     useState<CategoryTarget>('none')
+  const [renameCategoryDialogOpen, setRenameCategoryDialogOpen] =
+    useState(false)
+  const [renamingCategory, setRenamingCategory] = useState('')
+  const [renameCategoryDraft, setRenameCategoryDraft] = useState('')
+  const [renameCategoryError, setRenameCategoryError] = useState('')
+  const [draggedCategory, setDraggedCategory] = useState('')
+  const [dropCategory, setDropCategory] = useState('')
+  const [dropPosition, setDropPosition] =
+    useState<CategoryDropPosition | null>(null)
   const [managedCategory, setManagedCategory] = useState(DEFAULT_CATEGORY)
   const [moveTargetCategory, setMoveTargetCategory] = useState(DEFAULT_CATEGORY)
   const [deleteCategoryDialogOpen, setDeleteCategoryDialogOpen] = useState(false)
@@ -1324,6 +1457,9 @@ function App() {
 
   const groupedCards = useMemo(() => {
     const categoryMap = new Map<string, TavernCard[]>()
+    const categoryOrder = new Map(
+      categories.map((categoryName, index) => [categoryName, index]),
+    )
 
     for (const card of filteredCards) {
       const groupName = card.category || ALL_CATEGORY
@@ -1332,8 +1468,20 @@ function App() {
       categoryMap.set(groupName, group)
     }
 
-    return Array.from(categoryMap.entries())
-  }, [filteredCards])
+    return Array.from(categoryMap.entries()).sort(([leftName], [rightName]) => {
+      const leftCategory = leftName === ALL_CATEGORY ? DEFAULT_CATEGORY : leftName
+      const rightCategory =
+        rightName === ALL_CATEGORY ? DEFAULT_CATEGORY : rightName
+      const leftOrder = leftCategory
+        ? (categoryOrder.get(leftCategory) ?? Number.MAX_SAFE_INTEGER)
+        : -1
+      const rightOrder = rightCategory
+        ? (categoryOrder.get(rightCategory) ?? Number.MAX_SAFE_INTEGER)
+        : -1
+
+      return leftOrder - rightOrder
+    })
+  }, [categories, filteredCards])
 
   const recommendedCards = useMemo(
     () => filteredCards.filter((card) => card.recommended),
@@ -1460,6 +1608,21 @@ function App() {
     openCategoryCreator(getCategoryParent(siblingCategory), target)
   }
 
+  function openRenameCategoryDialog(categoryPath: string) {
+    const nextCategory = cleanCategory(categoryPath)
+    const categoryName = getCategoryParts(nextCategory).at(-1) || ''
+
+    if (!nextCategory || !categoryName) {
+      notify('全部不是可编辑目录')
+      return
+    }
+
+    setRenamingCategory(nextCategory)
+    setRenameCategoryDraft(categoryName)
+    setRenameCategoryError('')
+    setRenameCategoryDialogOpen(true)
+  }
+
   function resetCategorySelection(removedCategory: string, fallbackCategory: string) {
     const nextFallbackCategory = cleanCategory(fallbackCategory)
 
@@ -1490,6 +1653,21 @@ function App() {
     if (isCategoryWithin(deleteMoveTargetCategory, removedCategory)) {
       setDeleteMoveTargetCategory(nextFallbackCategory)
     }
+  }
+
+  function remapCategorySelection(sourceCategory: string, targetCategory: string) {
+    const remap = (value: string) =>
+      isCategoryWithin(value, sourceCategory)
+        ? replaceCategoryPath(value, sourceCategory, targetCategory)
+        : value
+
+    setCategory((currentCategory) => remap(currentCategory))
+    setImportCategory((currentCategory) => remap(currentCategory))
+    setEditCategory((currentCategory) => remap(currentCategory))
+    setActiveCategory((currentCategory) => remap(currentCategory))
+    setManagedCategory((currentCategory) => remap(currentCategory))
+    setMoveTargetCategory((currentCategory) => remap(currentCategory))
+    setDeleteMoveTargetCategory((currentCategory) => remap(currentCategory))
   }
 
   function saveCategory(event: FormEvent<HTMLFormElement>) {
@@ -1533,6 +1711,191 @@ function App() {
     setCategoryParent('')
     setCategoryTarget('none')
     notify('已创建分类')
+  }
+
+  function saveRenamedCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!isAdmin || !isEditMode) {
+      notify('请先进入 admin 编辑模式')
+      return
+    }
+
+    const sourceCategory = cleanCategory(renamingCategory)
+    const nextName = renameCategoryDraft.trim()
+
+    if (!sourceCategory) {
+      setRenameCategoryError('请选择分类')
+      return
+    }
+
+    if (!nextName) {
+      setRenameCategoryError('请填写分类名称')
+      return
+    }
+
+    if (/[/>\\]+/.test(nextName)) {
+      setRenameCategoryError('分类名称不能包含 /、> 或 \\')
+      return
+    }
+
+    const nextParts = getCategoryParts(sourceCategory)
+    nextParts[nextParts.length - 1] = nextName
+    const targetCategory = cleanCategory(nextParts.join('/'))
+
+    if (!targetCategory) {
+      setRenameCategoryError('全部不是目录名称')
+      return
+    }
+
+    if (sourceCategory === targetCategory) {
+      setRenameCategoryDialogOpen(false)
+      setRenameCategoryDraft('')
+      setRenamingCategory('')
+      setRenameCategoryError('')
+      notify('分类名称没有变化')
+      return
+    }
+
+    const outsideCategories = categoryOptions.filter(
+      (item) => !isCategoryWithin(item, sourceCategory),
+    )
+    const renamedCategories = uniqueCategories(
+      categoryOptions
+        .filter((item) => isCategoryWithin(item, sourceCategory))
+        .map((item) => replaceCategoryPath(item, sourceCategory, targetCategory)),
+    )
+
+    if (
+      renamedCategories.some((item) => outsideCategories.includes(item)) ||
+      outsideCategories.includes(targetCategory)
+    ) {
+      setRenameCategoryError('这个分类已经存在')
+      return
+    }
+
+    setCategories((currentCategories) =>
+      uniqueCategories(
+        currentCategories.map((item) =>
+          replaceCategoryPath(item, sourceCategory, targetCategory),
+        ),
+      ),
+    )
+    setCards((currentCards) =>
+      currentCards.map((card) =>
+        isCategoryWithin(card.category, sourceCategory)
+          ? {
+              ...card,
+              category: replaceCategoryPath(
+                card.category,
+                sourceCategory,
+                targetCategory,
+              ),
+            }
+          : card,
+      ),
+    )
+    remapCategorySelection(sourceCategory, targetCategory)
+    setRenamingCategory('')
+    setRenameCategoryDraft('')
+    setRenameCategoryError('')
+    setRenameCategoryDialogOpen(false)
+    notify('分类已重命名')
+  }
+
+  function resetCategoryDragState() {
+    setDraggedCategory('')
+    setDropCategory('')
+    setDropPosition(null)
+  }
+
+  function dragCategory(categoryPath: string) {
+    setDraggedCategory(cleanCategory(categoryPath))
+  }
+
+  function hoverCategoryDrop(
+    event: DragEvent<HTMLDivElement>,
+    targetCategory: string,
+    position: CategoryDropPosition,
+  ) {
+    const sourceCategory = cleanCategory(draggedCategory)
+    const nextTargetCategory = cleanCategory(targetCategory)
+
+    if (
+      !sourceCategory ||
+      !nextTargetCategory ||
+      sourceCategory === nextTargetCategory ||
+      getCategoryParent(sourceCategory) !== getCategoryParent(nextTargetCategory)
+    ) {
+      return
+    }
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setDropCategory(nextTargetCategory)
+    setDropPosition(position)
+  }
+
+  function dropCategoryOnCategory(
+    event: DragEvent<HTMLDivElement>,
+    targetCategory: string,
+    position: CategoryDropPosition,
+  ) {
+    event.preventDefault()
+
+    const sourceCategory = cleanCategory(
+      draggedCategory || event.dataTransfer.getData('text/plain'),
+    )
+    const nextTargetCategory = cleanCategory(targetCategory)
+
+    resetCategoryDragState()
+
+    if (
+      !sourceCategory ||
+      !nextTargetCategory ||
+      sourceCategory === nextTargetCategory
+    ) {
+      return
+    }
+
+    if (getCategoryParent(sourceCategory) !== getCategoryParent(nextTargetCategory)) {
+      notify('只能在同级分类之间排序')
+      return
+    }
+
+    setCategories((currentCategories) => {
+      const nextCategories = uniqueCategories([
+        ...currentCategories,
+        ...cards.map((card) => card.category),
+      ])
+      const sourceBlock = nextCategories.filter((item) =>
+        isCategoryWithin(item, sourceCategory),
+      )
+      const withoutSourceBlock = nextCategories.filter(
+        (item) => !isCategoryWithin(item, sourceCategory),
+      )
+      const targetIndexes = withoutSourceBlock
+        .map((item, index) =>
+          isCategoryWithin(item, nextTargetCategory) ? index : -1,
+        )
+        .filter((index) => index >= 0)
+
+      if (!sourceBlock.length || !targetIndexes.length) {
+        return currentCategories
+      }
+
+      const insertIndex =
+        position === 'before'
+          ? targetIndexes[0]
+          : targetIndexes[targetIndexes.length - 1] + 1
+
+      return uniqueCategories([
+        ...withoutSourceBlock.slice(0, insertIndex),
+        ...sourceBlock,
+        ...withoutSourceBlock.slice(insertIndex),
+      ])
+    })
+    notify('分类顺序已更新')
   }
 
   function moveCardsFromManagedCategory() {
@@ -2077,18 +2440,7 @@ function App() {
       <div className="mx-auto flex min-h-screen w-full max-w-[1500px] flex-col gap-5 px-4 py-4 sm:px-6 lg:px-8">
         <header className="sticky top-0 z-30 -mx-4 border-b border-border bg-background/90 px-4 py-4 backdrop-blur-xl sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
           <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium text-muted-foreground shadow-hairline">
-                  Local
-                </span>
-                <span className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium text-muted-foreground shadow-hairline">
-                  {cards.length} 张卡
-                </span>
-                <span className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium text-muted-foreground shadow-hairline">
-                  {categoryPaths.length} 个目录
-                </span>
-              </div>
+            <div>
               <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">
                 <button
                   className="rounded-md text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring"
@@ -2240,12 +2592,24 @@ function App() {
                 ) : null}
                 <CategoryTree
                   activeCategory={activeCategory}
+                  draggedCategory={draggedCategory}
+                  dropCategory={dropCategory}
+                  dropPosition={dropPosition}
                   isEditMode={isEditMode}
                   nodes={categoryTree}
                   onCreateChild={(parentCategory) =>
                     openCategoryCreator(parentCategory, 'card')
                   }
+                  onDragEnd={resetCategoryDragState}
+                  onDragLeave={() => {
+                    setDropCategory('')
+                    setDropPosition(null)
+                  }}
+                  onDragOver={hoverCategoryDrop}
+                  onDragStart={dragCategory}
+                  onDrop={dropCategoryOnCategory}
                   onJump={jumpToCategory}
+                  onRename={openRenameCategoryDialog}
                 />
               </CardContent>
             </Card>
@@ -2297,7 +2661,7 @@ function App() {
                         ))}
                       </select>
                     </label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                       <Button
                         type="button"
                         variant="outline"
@@ -2310,6 +2674,17 @@ function App() {
                       >
                         <Plus />
                         同级
+                      </Button>
+                      <Button
+                        disabled={!currentManagedCategory}
+                        type="button"
+                        variant="outline"
+                        onClick={() =>
+                          openRenameCategoryDialog(currentManagedCategory)
+                        }
+                      >
+                        <Pencil />
+                        改名
                       </Button>
                       <Button
                         type="button"
@@ -2469,7 +2844,7 @@ function App() {
                         {recommendedCards.length} 张
                       </span>
                     </div>
-                    <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
+                    <div className="card-grid">
                       {recommendedCards.map((card) => (
                         <TavernCardItem
                           card={card}
@@ -2499,7 +2874,7 @@ function App() {
                       </span>
                     </div>
 
-                    <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
+                    <div className="card-grid">
                       {group.map((card) => (
                         <TavernCardItem
                           card={card}
@@ -2683,6 +3058,61 @@ function App() {
               <Button type="submit">
                 <Plus />
                 创建
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={renameCategoryDialogOpen && isAdmin && isEditMode}
+        onOpenChange={(open) => {
+          setRenameCategoryDialogOpen(open)
+          if (!open) {
+            setRenamingCategory('')
+            setRenameCategoryDraft('')
+            setRenameCategoryError('')
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重命名分类</DialogTitle>
+            <DialogDescription>
+              修改 {renamingCategory} 及其子分类路径。
+            </DialogDescription>
+          </DialogHeader>
+          <form className="space-y-4" onSubmit={saveRenamedCategory}>
+            <label className="block space-y-2 text-sm font-medium">
+              <span>分类名称</span>
+              <Input
+                autoFocus
+                value={renameCategoryDraft}
+                onChange={(event) => {
+                  setRenameCategoryDraft(event.target.value)
+                  setRenameCategoryError('')
+                }}
+              />
+            </label>
+            {renameCategoryError ? (
+              <p
+                className="rounded-md border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground"
+                role="alert"
+              >
+                {renameCategoryError}
+              </p>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setRenameCategoryDialogOpen(false)}
+              >
+                取消
+              </Button>
+              <Button type="submit">
+                <Check />
+                保存
               </Button>
             </div>
           </form>
