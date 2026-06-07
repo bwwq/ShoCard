@@ -9,6 +9,8 @@ import {
   useState,
 } from 'react'
 import {
+  ArrowDownUp,
+  ChartColumn,
   Check,
   ClipboardPaste,
   Copy,
@@ -22,9 +24,11 @@ import {
   Lock,
   LogOut,
   Moon,
+  MousePointerClick,
   PanelLeft,
   Pencil,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Star,
@@ -127,6 +131,36 @@ type AuthStatus = {
   setupAllowed: boolean
 }
 
+type AnalyticsDay = {
+  clicks: number
+  date: string
+  uniqueClicks: number
+  uniqueVisits: number
+  visits: number
+}
+
+type CardAnalytics = {
+  cardId: string
+  category: string
+  clicks: number
+  lastClickedAt: string
+  title: string
+  uniqueClicks: number
+  url: string
+}
+
+type AnalyticsPayload = {
+  cards: Record<string, CardAnalytics>
+  daily: AnalyticsDay[]
+  totalClicks: number
+  totalUniqueClicks: number
+  totalUniqueVisitors: number
+  totalVisits: number
+  updatedAt: string
+}
+
+type AnalyticsSortKey = 'category' | 'clicks' | 'recent' | 'title'
+
 type ApiRequestError = Error & {
   status?: number
 }
@@ -149,6 +183,8 @@ const UPLOAD_IMAGE_MAX_SIZE = 1280
 const UPLOAD_IMAGE_QUALITY = 0.82
 const RECOMMENDED_CATEGORY = '__recommended'
 const RECOMMENDED_SECTION_ID = 'recommended-section'
+const ANALYTICS_RECENT_DAYS = 7
+const ANALYTICS_RANK_LIMIT = 12
 const DISCORD_LINK_PATTERN =
   /https?:\/\/(?:(?:canary|ptb)\.)?discord\.com\/channels\/\S+/i
 
@@ -730,6 +766,84 @@ function logoutAdmin() {
   return requestJson<AuthStatus>('/api/auth/logout', {
     body: JSON.stringify({}),
     method: 'POST',
+  })
+}
+
+function createEmptyAnalytics(): AnalyticsPayload {
+  return {
+    cards: {},
+    daily: [],
+    totalClicks: 0,
+    totalUniqueClicks: 0,
+    totalUniqueVisitors: 0,
+    totalVisits: 0,
+    updatedAt: '',
+  }
+}
+
+function loadAnalytics() {
+  return requestJson<AnalyticsPayload>('/api/analytics')
+}
+
+function sendAnalyticsEvent(path: string, payload: Record<string, unknown>) {
+  const body = JSON.stringify(payload)
+
+  if (navigator.sendBeacon) {
+    const blob = new Blob([body], { type: 'application/json' })
+
+    if (navigator.sendBeacon(path, blob)) {
+      return
+    }
+  }
+
+  void fetch(path, {
+    body,
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    keepalive: true,
+    method: 'POST',
+  }).catch(() => undefined)
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat('zh-CN').format(value)
+}
+
+function formatAnalyticsDateTime(value: string) {
+  if (!value) {
+    return '暂无'
+  }
+
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return '暂无'
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: '2-digit',
+  }).format(date)
+}
+
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+function getRecentDateKeys(days: number) {
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() - (days - index - 1))
+
+    return getLocalDateKey(date)
   })
 }
 
@@ -1354,17 +1468,335 @@ function ImageCropDialog({
 
 type TavernCardItemProps = {
   card: TavernCard
+  cardAnalytics?: CardAnalytics
+  isAdmin: boolean
   isEditMode: boolean
   onCopyLink: (cardUrl: string) => void
   onDeleteCard: (cardId: string) => void
+  onOpenLink: (card: TavernCard) => void
   onOpenEditor: (card: TavernCard) => void
+}
+
+type AnalyticsPanelProps = {
+  analytics: AnalyticsPayload
+  analyticsError: string
+  analyticsLoaded: boolean
+  analyticsLoading: boolean
+  cards: TavernCard[]
+  onRefresh: () => void
+  onSortKeyChange: (sortKey: AnalyticsSortKey) => void
+  sortKey: AnalyticsSortKey
+}
+
+function AnalyticsPanel({
+  analytics,
+  analyticsError,
+  analyticsLoaded,
+  analyticsLoading,
+  cards,
+  onRefresh,
+  onSortKeyChange,
+  sortKey,
+}: AnalyticsPanelProps) {
+  const dayMap = useMemo(
+    () => new Map(analytics.daily.map((day) => [day.date, day])),
+    [analytics.daily],
+  )
+  const recentDays = useMemo(
+    () =>
+      getRecentDateKeys(ANALYTICS_RECENT_DAYS).map(
+        (date) =>
+          dayMap.get(date) || {
+            clicks: 0,
+            date,
+            uniqueClicks: 0,
+            uniqueVisits: 0,
+            visits: 0,
+          },
+      ),
+    [dayMap],
+  )
+  const todayStats =
+    dayMap.get(getLocalDateKey()) ||
+    ({
+      clicks: 0,
+      date: getLocalDateKey(),
+      uniqueClicks: 0,
+      uniqueVisits: 0,
+      visits: 0,
+    } satisfies AnalyticsDay)
+  const recentUniqueVisits = recentDays.reduce(
+    (sum, day) => sum + day.uniqueVisits,
+    0,
+  )
+  const recentUniqueClicks = recentDays.reduce(
+    (sum, day) => sum + day.uniqueClicks,
+    0,
+  )
+  const maxRecentValue = Math.max(
+    1,
+    ...recentDays.map((day) => Math.max(day.uniqueVisits, day.uniqueClicks)),
+  )
+  const cardIdSet = useMemo(
+    () => new Set(cards.map((card) => card.id)),
+    [cards],
+  )
+  const sortedRows = useMemo(() => {
+    const rows = Object.values(analytics.cards).filter(
+      (cardStats) => cardIdSet.has(cardStats.cardId) || cardStats.title,
+    )
+
+    return rows
+      .sort((left, right) => {
+        if (sortKey === 'clicks') {
+          return (
+            right.uniqueClicks - left.uniqueClicks ||
+            right.clicks - left.clicks ||
+            left.title.localeCompare(right.title, 'zh-CN')
+          )
+        }
+
+        if (sortKey === 'recent') {
+          return (
+            new Date(right.lastClickedAt || 0).getTime() -
+              new Date(left.lastClickedAt || 0).getTime() ||
+            right.uniqueClicks - left.uniqueClicks
+          )
+        }
+
+        if (sortKey === 'title') {
+          return left.title.localeCompare(right.title, 'zh-CN')
+        }
+
+        return (
+          formatCategoryLabel(left.category).localeCompare(
+            formatCategoryLabel(right.category),
+            'zh-CN',
+          ) || right.uniqueClicks - left.uniqueClicks
+        )
+      })
+      .slice(0, ANALYTICS_RANK_LIMIT)
+  }, [analytics.cards, cardIdSet, sortKey])
+
+  return (
+    <section className="mb-4 space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          {
+            label: '今日真实访客',
+            value: todayStats.uniqueVisits,
+            detail: `${formatCount(todayStats.visits)} 次访问`,
+          },
+          {
+            label: '总真实访客',
+            value: analytics.totalUniqueVisitors,
+            detail: `${formatCount(analytics.totalVisits)} 次访问`,
+          },
+          {
+            label: '真实点击',
+            value: analytics.totalUniqueClicks,
+            detail: `${formatCount(analytics.totalClicks)} 次点击`,
+          },
+          {
+            label: '近 7 天真实点击',
+            value: recentUniqueClicks,
+            detail: `${formatCount(recentUniqueVisits)} 位访客`,
+          },
+        ].map((item) => (
+          <Card className="bg-card/80 shadow-hairline backdrop-blur-xl" key={item.label}>
+            <CardContent className="flex items-center justify-between gap-3 p-4">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium text-muted-foreground">
+                  {item.label}
+                </p>
+                <p className="mt-1 text-2xl font-semibold leading-8">
+                  {formatCount(item.value)}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {item.detail}
+                </p>
+              </div>
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted/70 text-muted-foreground">
+                {item.label.includes('点击') ? (
+                  <MousePointerClick className="size-4" />
+                ) : (
+                  <ChartColumn className="size-4" />
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <Card className="bg-card/80 shadow-hairline backdrop-blur-xl">
+          <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ChartColumn className="size-4" />
+              访问总览
+            </CardTitle>
+            <Button
+              aria-label="刷新统计"
+              disabled={analyticsLoading}
+              size="icon"
+              title="刷新统计"
+              type="button"
+              variant="outline"
+              onClick={onRefresh}
+            >
+              <RefreshCw />
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex h-28 items-end gap-2">
+              {recentDays.map((day) => (
+                <div
+                  className="flex min-w-0 flex-1 flex-col items-center gap-2"
+                  key={day.date}
+                  title={`${day.date} 访客 ${day.uniqueVisits}, 点击 ${day.uniqueClicks}`}
+                >
+                  <div className="flex h-20 w-full items-end justify-center gap-1 rounded-md border border-border bg-muted/40 px-1 py-1">
+                    <span
+                      className="w-full rounded-sm bg-primary"
+                      style={{
+                        height: day.uniqueVisits
+                          ? `${Math.max(
+                              8,
+                              (day.uniqueVisits / maxRecentValue) * 100,
+                            )}%`
+                          : '0%',
+                      }}
+                    />
+                    <span
+                      className="w-full rounded-sm bg-muted-foreground/60"
+                      style={{
+                        height: day.uniqueClicks
+                          ? `${Math.max(
+                              8,
+                              (day.uniqueClicks / maxRecentValue) * 100,
+                            )}%`
+                          : '0%',
+                      }}
+                    />
+                  </div>
+                  <span className="w-full truncate text-center text-[11px] text-muted-foreground">
+                    {day.date.slice(5)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+              <div className="rounded-md border border-border bg-muted/50 px-3 py-2">
+                访客 {formatCount(recentUniqueVisits)}
+              </div>
+              <div className="rounded-md border border-border bg-muted/50 px-3 py-2">
+                点击 {formatCount(recentUniqueClicks)}
+              </div>
+            </div>
+            {analyticsError ? (
+              <p
+                className="rounded-md border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground"
+                role="alert"
+              >
+                {analyticsError}
+              </p>
+            ) : null}
+            {!analyticsLoaded && !analyticsError ? (
+              <p className="rounded-md border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                正在加载统计...
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card/80 shadow-hairline backdrop-blur-xl">
+          <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MousePointerClick className="size-4" />
+              热度排行
+            </CardTitle>
+            <label className="flex min-w-0 items-center gap-2">
+              <ArrowDownUp className="size-4 shrink-0 text-muted-foreground" />
+              <select
+                aria-label="排行排序"
+                className="h-9 rounded-md border border-input bg-card/80 px-2 text-sm text-foreground shadow-hairline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={sortKey}
+                onChange={(event) =>
+                  onSortKeyChange(event.target.value as AnalyticsSortKey)
+                }
+              >
+                <option value="clicks">真实点击</option>
+                <option value="recent">最近点击</option>
+                <option value="title">标题</option>
+                <option value="category">分类</option>
+              </select>
+            </label>
+          </CardHeader>
+          <CardContent>
+            {sortedRows.length ? (
+              <div className="overflow-hidden rounded-lg border border-border">
+                <div className="hidden grid-cols-[minmax(0,1fr)_84px_84px_96px] gap-3 border-b border-border bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground sm:grid">
+                  <span>卡片</span>
+                  <span>真实点击</span>
+                  <span>总点击</span>
+                  <span>最近</span>
+                </div>
+                <div className="divide-y divide-border">
+                  {sortedRows.map((row) => (
+                    <div
+                      className="grid gap-2 px-3 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_84px_84px_96px] sm:items-center"
+                      key={row.cardId}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">
+                          {row.title || '已删除卡片'}
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {formatCategoryLabel(row.category)}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 sm:block">
+                        <span className="text-xs text-muted-foreground sm:hidden">
+                          真实点击
+                        </span>
+                        <span className="font-medium">
+                          {formatCount(row.uniqueClicks)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 sm:block">
+                        <span className="text-xs text-muted-foreground sm:hidden">
+                          总点击
+                        </span>
+                        <span>{formatCount(row.clicks)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground sm:block">
+                        <span className="sm:hidden">最近</span>
+                        <span>{formatAnalyticsDateTime(row.lastClickedAt)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-md border border-border bg-muted/60 px-3 py-8 text-center text-sm text-muted-foreground">
+                暂无点击数据
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </section>
+  )
 }
 
 function TavernCardItem({
   card,
+  cardAnalytics,
+  isAdmin,
   isEditMode,
   onCopyLink,
   onDeleteCard,
+  onOpenLink,
   onOpenEditor,
 }: TavernCardItemProps) {
   return (
@@ -1404,6 +1836,7 @@ function TavernCardItem({
             href={card.url}
             rel="noreferrer"
             target="_blank"
+            onClick={() => onOpenLink(card)}
           >
             <LinkIcon className="mt-0.5 size-4 shrink-0" />
             <span className="min-w-0 break-all">{card.url}</span>
@@ -1420,6 +1853,20 @@ function TavernCardItem({
             <span className="sr-only">复制</span>
           </Button>
         </div>
+        {isAdmin ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/70 px-2.5 py-1"
+              title="按 IP 去重后的点击"
+            >
+              <MousePointerClick className="size-3.5" />
+              真实点击 {formatCount(cardAnalytics?.uniqueClicks || 0)}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/70 px-2.5 py-1">
+              总点击 {formatCount(cardAnalytics?.clicks || 0)}
+            </span>
+          </div>
+        ) : null}
       </CardContent>
       {isEditMode ? (
         <CardFooter className="justify-end">
@@ -1527,6 +1974,14 @@ function App() {
   const [stateLoaded, setStateLoaded] = useState(false)
   const [stateError, setStateError] = useState('')
   const [isSavingState, setIsSavingState] = useState(false)
+  const [analytics, setAnalytics] = useState<AnalyticsPayload>(
+    createEmptyAnalytics,
+  )
+  const [analyticsLoaded, setAnalyticsLoaded] = useState(false)
+  const [analyticsLoading, setAnalyticsLoading] = useState(false)
+  const [analyticsError, setAnalyticsError] = useState('')
+  const [analyticsSortKey, setAnalyticsSortKey] =
+    useState<AnalyticsSortKey>('clicks')
   const [legacyStateAvailable, setLegacyStateAvailable] = useState(() =>
     Boolean(getLegacyState()),
   )
@@ -1552,6 +2007,10 @@ function App() {
   useEffect(() => {
     document.title = siteTitle
   }, [siteTitle])
+
+  useEffect(() => {
+    sendAnalyticsEvent('/api/analytics/visit', {})
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -1582,6 +2041,34 @@ function App() {
         setStateError('')
         setStateLoaded(true)
         lastSavedStateRef.current = JSON.stringify(nextState)
+
+        if (authStatus.isAdmin) {
+          setAnalyticsLoading(true)
+
+          try {
+            const nextAnalytics = await loadAnalytics()
+
+            if (cancelled) {
+              return
+            }
+
+            setAnalytics(nextAnalytics)
+            setAnalyticsLoaded(true)
+            setAnalyticsError('')
+          } catch (error) {
+            if (cancelled) {
+              return
+            }
+
+            setAnalyticsError(
+              error instanceof Error ? error.message : '无法加载统计',
+            )
+          } finally {
+            if (!cancelled) {
+              setAnalyticsLoading(false)
+            }
+          }
+        }
       } catch (error) {
         if (cancelled) {
           return
@@ -1624,6 +2111,9 @@ function App() {
           setIsAdmin(false)
           setIsEditMode(false)
           setEditingCard(null)
+          setAnalytics(createEmptyAnalytics())
+          setAnalyticsLoaded(false)
+          setAnalyticsError('')
           setNotice('Admin 会话已失效，请重新登录')
         }
 
@@ -1761,6 +2251,41 @@ function App() {
 
   function notify(message: string) {
     setNotice(message)
+  }
+
+  async function refreshAnalytics(announce = false) {
+    setAnalyticsLoading(true)
+
+    try {
+      const nextAnalytics = await loadAnalytics()
+      setAnalytics(nextAnalytics)
+      setAnalyticsLoaded(true)
+      setAnalyticsError('')
+
+      if (announce) {
+        notify('统计已刷新')
+      }
+    } catch (error) {
+      const apiError = error as ApiRequestError
+      const message = error instanceof Error ? error.message : '无法加载统计'
+
+      if (apiError.status === 401) {
+        setIsAdmin(false)
+        setIsEditMode(false)
+        setEditingCard(null)
+        setAnalytics(createEmptyAnalytics())
+        setAnalyticsLoaded(false)
+        setNotice('Admin 会话已失效，请重新登录')
+      }
+
+      setAnalyticsError(message)
+
+      if (announce && apiError.status !== 401) {
+        notify('统计刷新失败')
+      }
+    } finally {
+      setAnalyticsLoading(false)
+    }
   }
 
   function resetAddForm() {
@@ -2494,6 +3019,7 @@ function App() {
       setAdminAccount('')
       setAdminPassword('')
       setAdminError('')
+      await refreshAnalytics(false)
       notify(migratedState ? '已恢复本地存档到服务器' : '已进入 admin 浏览模式')
     } catch (error) {
       setAdminError(error instanceof Error ? error.message : '登录失败')
@@ -2513,6 +3039,9 @@ function App() {
     setIsAdmin(false)
     setIsEditMode(false)
     setEditingCard(null)
+    setAnalytics(createEmptyAnalytics())
+    setAnalyticsLoaded(false)
+    setAnalyticsError('')
     notify('已退出 admin')
   }
 
@@ -2553,6 +3082,9 @@ function App() {
         setIsAdmin(false)
         setIsEditMode(false)
         setEditingCard(null)
+        setAnalytics(createEmptyAnalytics())
+        setAnalyticsLoaded(false)
+        setAnalyticsError('')
       }
 
       setStateError(error instanceof Error ? error.message : '恢复本地存档失败')
@@ -2810,6 +3342,16 @@ function App() {
       notify('链接已复制')
     } catch {
       notify('复制失败')
+    }
+  }
+
+  function trackCardOpen(card: TavernCard) {
+    sendAnalyticsEvent('/api/analytics/click', { cardId: card.id })
+
+    if (isAdmin) {
+      window.setTimeout(() => {
+        void refreshAnalytics(false)
+      }, 500)
     }
   }
 
@@ -3340,6 +3882,21 @@ function App() {
           ) : null}
 
           <section className="min-w-0">
+            {isAdmin ? (
+              <AnalyticsPanel
+                analytics={analytics}
+                analyticsError={analyticsError}
+                analyticsLoaded={analyticsLoaded}
+                analyticsLoading={analyticsLoading}
+                cards={cards}
+                sortKey={analyticsSortKey}
+                onRefresh={() => {
+                  void refreshAnalytics(true)
+                }}
+                onSortKeyChange={setAnalyticsSortKey}
+              />
+            ) : null}
+
             <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-card/80 px-4 py-3 shadow-hairline backdrop-blur-xl">
               <div className="min-w-0">
                 <h2 className="text-base font-semibold leading-6">展示区</h2>
@@ -3378,10 +3935,13 @@ function App() {
                       {recommendedCards.map((card) => (
                         <TavernCardItem
                           card={card}
+                          cardAnalytics={analytics.cards[card.id]}
+                          isAdmin={isAdmin}
                           isEditMode={isEditMode}
                           key={`recommended-${card.id}`}
                           onCopyLink={copyLink}
                           onDeleteCard={deleteCard}
+                          onOpenLink={trackCardOpen}
                           onOpenEditor={openEditor}
                         />
                       ))}
@@ -3408,10 +3968,13 @@ function App() {
                       {group.map((card) => (
                         <TavernCardItem
                           card={card}
+                          cardAnalytics={analytics.cards[card.id]}
+                          isAdmin={isAdmin}
                           isEditMode={isEditMode}
                           key={card.id}
                           onCopyLink={copyLink}
                           onDeleteCard={deleteCard}
+                          onOpenLink={trackCardOpen}
                           onOpenEditor={openEditor}
                         />
                       ))}

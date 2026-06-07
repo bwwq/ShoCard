@@ -16,6 +16,7 @@ const DATA_DIR = process.env.DATA_DIR
 const DIST_DIR = path.join(rootDir, 'dist')
 const STATE_FILE = path.join(DATA_DIR, 'state.json')
 const AUTH_FILE = path.join(DATA_DIR, 'auth.json')
+const ANALYTICS_FILE = path.join(DATA_DIR, 'analytics.json')
 const DEFAULT_SITE_TITLE = 'DC 酒馆卡展示'
 const DEFAULT_CATEGORY = ''
 const LEGACY_DEFAULT_CATEGORY = '默认'
@@ -28,8 +29,12 @@ const JSON_LIMIT_BYTES = 50 * 1024 * 1024
 const COOKIE_NAME = 'dc_tavern_session'
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const PASSWORD_ITERATIONS = 310000
+const ANALYTICS_DAYS_LIMIT = 90
+const ANALYTICS_IP_SALT =
+  process.env.ANALYTICS_IP_SALT || `${rootDir}:${COOKIE_NAME}`
 
 const sessions = new Map()
+let analyticsQueue = Promise.resolve()
 
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) {
@@ -187,6 +192,183 @@ function sanitizeState(value) {
   }
 }
 
+function toNonNegativeInteger(value) {
+  const parsedValue = Number(value)
+
+  if (!Number.isFinite(parsedValue)) {
+    return 0
+  }
+
+  return Math.max(0, Math.floor(parsedValue))
+}
+
+function uniqueLimitedStrings(value, maxItems) {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const values = Array.from(
+    new Set(
+      value
+        .filter((item) => typeof item === 'string' && item.trim())
+        .map((item) => item.trim().slice(0, 260)),
+    ),
+  )
+
+  return values.slice(Math.max(0, values.length - maxItems))
+}
+
+function getDateKey(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+function createEmptyAnalytics() {
+  return {
+    cards: {},
+    daily: [],
+    totalClicks: 0,
+    totalVisits: 0,
+    updatedAt: '',
+    visitorIps: [],
+  }
+}
+
+function sanitizeAnalyticsDay(value) {
+  const date =
+    typeof value?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+      ? value.date
+      : ''
+
+  if (!date) {
+    return null
+  }
+
+  const visitorIps = uniqueLimitedStrings(value?.visitorIps, 50000)
+  const clickKeys = uniqueLimitedStrings(value?.clickKeys, 100000)
+
+  return {
+    clickKeys,
+    clicks: toNonNegativeInteger(value?.clicks),
+    date,
+    uniqueClicks: Math.max(
+      toNonNegativeInteger(value?.uniqueClicks),
+      clickKeys.length,
+    ),
+    uniqueVisits: Math.max(
+      toNonNegativeInteger(value?.uniqueVisits),
+      visitorIps.length,
+    ),
+    visitorIps,
+    visits: toNonNegativeInteger(value?.visits),
+  }
+}
+
+function mergeAnalyticsDays(days) {
+  const dayMap = new Map()
+
+  for (const day of days) {
+    if (!day) {
+      continue
+    }
+
+    const existingDay = dayMap.get(day.date)
+
+    if (!existingDay) {
+      dayMap.set(day.date, day)
+      continue
+    }
+
+    const visitorIps = Array.from(
+      new Set([...existingDay.visitorIps, ...day.visitorIps]),
+    )
+    const clickKeys = Array.from(
+      new Set([...existingDay.clickKeys, ...day.clickKeys]),
+    )
+
+    dayMap.set(day.date, {
+      clickKeys,
+      clicks: existingDay.clicks + day.clicks,
+      date: day.date,
+      uniqueClicks: Math.max(
+        existingDay.uniqueClicks,
+        day.uniqueClicks,
+        clickKeys.length,
+      ),
+      uniqueVisits: Math.max(
+        existingDay.uniqueVisits,
+        day.uniqueVisits,
+        visitorIps.length,
+      ),
+      visitorIps,
+      visits: existingDay.visits + day.visits,
+    })
+  }
+
+  return Array.from(dayMap.values())
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .slice(-ANALYTICS_DAYS_LIMIT)
+}
+
+function sanitizeCardAnalytics(value, fallbackCardId) {
+  const cardId = limitString(value?.cardId, 120) || fallbackCardId
+
+  if (!cardId) {
+    return null
+  }
+
+  const ipHashes = uniqueLimitedStrings(value?.ipHashes, 100000)
+
+  return {
+    cardId,
+    category: cleanCategory(value?.category),
+    clicks: toNonNegativeInteger(value?.clicks),
+    ipHashes,
+    lastClickedAt: limitString(value?.lastClickedAt, 80),
+    title: limitString(value?.title, 200),
+    uniqueClicks: Math.max(
+      toNonNegativeInteger(value?.uniqueClicks),
+      ipHashes.length,
+    ),
+    url: normalizeUrl(value?.url).slice(0, 2000),
+  }
+}
+
+function sanitizeAnalytics(value) {
+  const rawDaily = Array.isArray(value?.daily) ? value.daily : []
+  const daily = mergeAnalyticsDays(
+    rawDaily.map((day) => sanitizeAnalyticsDay(day)),
+  )
+  const cards = {}
+
+  if (value?.cards && typeof value.cards === 'object') {
+    for (const [cardId, cardStats] of Object.entries(value.cards)) {
+      const sanitizedCard = sanitizeCardAnalytics(cardStats, cardId)
+
+      if (sanitizedCard) {
+        cards[sanitizedCard.cardId] = sanitizedCard
+      }
+    }
+  }
+
+  const cardClickTotal = Object.values(cards).reduce(
+    (sum, cardStats) => sum + cardStats.clicks,
+    0,
+  )
+
+  return {
+    cards,
+    daily,
+    totalClicks: Math.max(toNonNegativeInteger(value?.totalClicks), cardClickTotal),
+    totalVisits: toNonNegativeInteger(value?.totalVisits),
+    updatedAt: limitString(value?.updatedAt, 80),
+    visitorIps: uniqueLimitedStrings(value?.visitorIps, 200000),
+  }
+}
+
 async function readJsonFile(filePath, fallback) {
   try {
     return JSON.parse(await readFile(filePath, 'utf8'))
@@ -210,6 +392,205 @@ async function writeState(state) {
   const nextState = sanitizeState(state)
   await writeJsonFile(STATE_FILE, nextState)
   return nextState
+}
+
+async function readAnalytics() {
+  return sanitizeAnalytics(await readJsonFile(ANALYTICS_FILE, createEmptyAnalytics()))
+}
+
+async function writeAnalytics(analytics) {
+  const nextAnalytics = sanitizeAnalytics(analytics)
+  await writeJsonFile(ANALYTICS_FILE, nextAnalytics)
+  return nextAnalytics
+}
+
+async function updateAnalytics(mutator) {
+  const task = analyticsQueue.then(async () => {
+    const currentAnalytics = await readAnalytics()
+    const nextAnalytics = mutator(currentAnalytics)
+
+    return writeAnalytics(nextAnalytics)
+  })
+
+  analyticsQueue = task.catch(() => {})
+
+  return task
+}
+
+function getClientIp(req) {
+  const forwardedFor = String(req.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim()
+  const realIp = String(req.headers['x-real-ip'] || '').trim()
+
+  return forwardedFor || realIp || req.socket.remoteAddress || 'unknown'
+}
+
+function getClientIpHash(req) {
+  return createHash('sha256')
+    .update(`${ANALYTICS_IP_SALT}:${getClientIp(req)}`)
+    .digest('hex')
+}
+
+function ensureAnalyticsDay(analytics, dateKey) {
+  let day = analytics.daily.find((item) => item.date === dateKey)
+
+  if (!day) {
+    day = {
+      clickKeys: [],
+      clicks: 0,
+      date: dateKey,
+      uniqueClicks: 0,
+      uniqueVisits: 0,
+      visitorIps: [],
+      visits: 0,
+    }
+    analytics.daily.push(day)
+  }
+
+  return day
+}
+
+async function recordVisit(req) {
+  const ipHash = getClientIpHash(req)
+  const now = new Date()
+  const dateKey = getDateKey(now)
+  const updatedAt = now.toISOString()
+
+  return updateAnalytics((analytics) => {
+    const day = ensureAnalyticsDay(analytics, dateKey)
+
+    analytics.totalVisits += 1
+    analytics.updatedAt = updatedAt
+    day.visits += 1
+
+    if (!analytics.visitorIps.includes(ipHash)) {
+      analytics.visitorIps.push(ipHash)
+    }
+
+    if (!day.visitorIps.includes(ipHash)) {
+      day.visitorIps.push(ipHash)
+      day.uniqueVisits = day.visitorIps.length
+    }
+
+    return analytics
+  })
+}
+
+async function recordCardClick(req, body) {
+  const cardId = limitString(body?.cardId, 120)
+
+  if (!cardId) {
+    throw new HttpError(400, '卡片信息不完整')
+  }
+
+  const ipHash = getClientIpHash(req)
+  const now = new Date()
+  const dateKey = getDateKey(now)
+  const updatedAt = now.toISOString()
+  const state = await readState()
+  const card = state.cards.find((item) => item.id === cardId)
+
+  return updateAnalytics((analytics) => {
+    const day = ensureAnalyticsDay(analytics, dateKey)
+    const cardStats =
+      sanitizeCardAnalytics(analytics.cards[cardId], cardId) || {
+        cardId,
+        category: '',
+        clicks: 0,
+        ipHashes: [],
+        lastClickedAt: '',
+        title: '',
+        uniqueClicks: 0,
+        url: '',
+      }
+    const clickKey = `${cardId}:${ipHash}`
+
+    analytics.totalClicks += 1
+    analytics.updatedAt = updatedAt
+    day.clicks += 1
+    cardStats.clicks += 1
+    cardStats.lastClickedAt = updatedAt
+
+    if (card) {
+      cardStats.category = card.category
+      cardStats.title = card.title
+      cardStats.url = card.url
+    }
+
+    if (!cardStats.ipHashes.includes(ipHash)) {
+      cardStats.ipHashes.push(ipHash)
+      cardStats.uniqueClicks = cardStats.ipHashes.length
+    }
+
+    if (!day.clickKeys.includes(clickKey)) {
+      day.clickKeys.push(clickKey)
+      day.uniqueClicks = day.clickKeys.length
+    }
+
+    analytics.cards[cardId] = cardStats
+
+    return analytics
+  })
+}
+
+function getAdminAnalyticsPayload(analytics, state) {
+  const cards = {}
+
+  for (const cardStats of Object.values(analytics.cards)) {
+    cards[cardStats.cardId] = {
+      cardId: cardStats.cardId,
+      category: cardStats.category,
+      clicks: cardStats.clicks,
+      lastClickedAt: cardStats.lastClickedAt,
+      title: cardStats.title,
+      uniqueClicks: cardStats.uniqueClicks,
+      url: cardStats.url,
+    }
+  }
+
+  for (const card of state.cards) {
+    const existingCard = cards[card.id] || {
+      cardId: card.id,
+      clicks: 0,
+      lastClickedAt: '',
+      uniqueClicks: 0,
+    }
+
+    cards[card.id] = {
+      ...existingCard,
+      category: card.category,
+      title: card.title,
+      url: card.url,
+    }
+  }
+
+  const visitorIps = new Set(analytics.visitorIps)
+
+  for (const day of analytics.daily) {
+    for (const ipHash of day.visitorIps) {
+      visitorIps.add(ipHash)
+    }
+  }
+
+  return {
+    cards,
+    daily: analytics.daily.map((day) => ({
+      clicks: day.clicks,
+      date: day.date,
+      uniqueClicks: day.uniqueClicks,
+      uniqueVisits: day.uniqueVisits,
+      visits: day.visits,
+    })),
+    totalClicks: analytics.totalClicks,
+    totalUniqueClicks: Object.values(cards).reduce(
+      (sum, cardStats) => sum + cardStats.uniqueClicks,
+      0,
+    ),
+    totalUniqueVisitors: visitorIps.size,
+    totalVisits: analytics.totalVisits,
+    updatedAt: analytics.updatedAt,
+  }
 }
 
 async function readAuthFile() {
@@ -484,6 +865,32 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === '/api/state' && req.method === 'GET') {
     sendJson(res, 200, await readState())
+    return
+  }
+
+  if (pathname === '/api/analytics/visit' && req.method === 'POST') {
+    await recordVisit(req)
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
+  if (pathname === '/api/analytics/click' && req.method === 'POST') {
+    await recordCardClick(req, await readJsonBody(req))
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
+  if (pathname === '/api/analytics' && req.method === 'GET') {
+    if (!configured || !getSession(req)) {
+      sendError(res, 401, '请先登录 admin')
+      return
+    }
+
+    sendJson(
+      res,
+      200,
+      getAdminAnalyticsPayload(await readAnalytics(), await readState()),
+    )
     return
   }
 
