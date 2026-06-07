@@ -1196,6 +1196,41 @@ type CroppedImageProps = {
   loading?: 'eager' | 'lazy'
 }
 
+type FixedCroppedImageProps = CroppedImageProps & {
+  frameClassName?: string
+}
+
+type CroppedImageContentProps = {
+  cropRect: CropRect
+  imageUrl: string
+  loading: 'eager' | 'lazy'
+}
+
+function CroppedImageContent({
+  cropRect,
+  imageUrl,
+  loading,
+}: CroppedImageContentProps) {
+  return imageUrl ? (
+    <img
+      alt=""
+      className="absolute max-w-none select-none"
+      draggable={false}
+      loading={loading}
+      src={imageUrl}
+      style={{
+        left: `${-(cropRect.x / cropRect.width) * 100}%`,
+        top: `${-(cropRect.y / cropRect.height) * 100}%`,
+        width: `${(100 / cropRect.width) * 100}%`,
+      }}
+    />
+  ) : (
+    <div className="flex h-full min-h-32 items-center justify-center text-sm text-muted-foreground">
+      未设置预览图
+    </div>
+  )
+}
+
 function CroppedImage({
   className,
   cropHeight,
@@ -1223,24 +1258,56 @@ function CroppedImage({
       className={`relative overflow-hidden bg-muted ${imageUrl ? '' : 'border border-dashed border-border'} ${className || ''}`}
       style={{ aspectRatio }}
     >
-      {imageUrl ? (
-        <img
-          alt=""
-          className="absolute max-w-none select-none"
-          draggable={false}
+      <CroppedImageContent
+        cropRect={cropRect}
+        imageUrl={imageUrl}
+        loading={loading}
+      />
+    </div>
+  )
+}
+
+function FixedCroppedImage({
+  className,
+  cropHeight,
+  cropWidth,
+  cropX,
+  cropY,
+  frameClassName,
+  imageAspectRatio,
+  imageUrl,
+  loading = 'lazy',
+}: FixedCroppedImageProps) {
+  const cropRect = sanitizeCropRect({
+    height: cropHeight,
+    width: cropWidth,
+    x: cropX,
+    y: cropY,
+  })
+  const aspectRatio = getCropAspectRatio(
+    imageAspectRatio,
+    cropRect.width,
+    cropRect.height,
+  )
+  const previewStyle =
+    aspectRatio >= 1
+      ? { aspectRatio, width: '100%' }
+      : { aspectRatio, height: '100%' }
+
+  return (
+    <div
+      className={`flex items-center justify-center overflow-hidden bg-muted ${imageUrl ? '' : 'border border-dashed border-border'} ${frameClassName || ''}`}
+    >
+      <div
+        className={`relative inline-block max-h-full max-w-full overflow-hidden bg-muted ${className || ''}`}
+        style={previewStyle}
+      >
+        <CroppedImageContent
+          cropRect={cropRect}
+          imageUrl={imageUrl}
           loading={loading}
-          src={imageUrl}
-          style={{
-            left: `${-(cropRect.x / cropRect.width) * 100}%`,
-            top: `${-(cropRect.y / cropRect.height) * 100}%`,
-            width: `${(100 / cropRect.width) * 100}%`,
-          }}
         />
-      ) : (
-        <div className="flex h-full min-h-32 items-center justify-center text-sm text-muted-foreground">
-          未设置预览图
-        </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -1422,8 +1489,8 @@ function ImageCropDialog({
                 <CropIcon className="size-4" />
                 预览图
               </div>
-              <CroppedImage
-                className="rounded-md border border-border"
+              <FixedCroppedImage
+                frameClassName="mx-auto h-72 w-full rounded-md border border-border"
                 cropHeight={draftCrop.height}
                 cropWidth={draftCrop.width}
                 cropX={draftCrop.x}
@@ -4412,8 +4479,8 @@ function App() {
                   </Button>
                 ) : null}
               </div>
-              <CroppedImage
-                className="rounded-md border border-border"
+              <FixedCroppedImage
+                frameClassName="mx-auto size-[190px] rounded-md border border-border"
                 cropHeight={cropHeight}
                 cropWidth={cropWidth}
                 cropX={cropX}
@@ -4575,8 +4642,8 @@ function App() {
                     </Button>
                   ) : null}
                 </div>
-                <CroppedImage
-                  className="rounded-md border border-border"
+                <FixedCroppedImage
+                  frameClassName="mx-auto size-[190px] rounded-md border border-border"
                   cropHeight={editCropHeight}
                   cropWidth={editCropWidth}
                   cropX={editCropX}
