@@ -10,6 +10,16 @@
     align-items: stretch;
   }
 
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
   .category-hold-effect,
   .category-drag-ready {
     position: relative;

@@ -3963,25 +3963,27 @@ function App() {
           }
         }}
       >
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="grid h-[calc(100vh-2rem)] max-h-[calc(100vh-2rem)] max-w-5xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:h-[760px]">
           <DialogHeader>
             <DialogTitle>数据</DialogTitle>
             <DialogDescription className="sr-only">
               查看访问总览和点击排行
             </DialogDescription>
           </DialogHeader>
-          <AnalyticsPanel
-            analytics={analytics}
-            analyticsError={analyticsError}
-            analyticsLoaded={analyticsLoaded}
-            analyticsLoading={analyticsLoading}
-            cards={cards}
-            sortKey={analyticsSortKey}
-            onRefresh={() => {
-              void refreshAnalytics(true)
-            }}
-            onSortKeyChange={setAnalyticsSortKey}
-          />
+          <div className="scrollbar-none min-h-0 overflow-y-auto pr-1">
+            <AnalyticsPanel
+              analytics={analytics}
+              analyticsError={analyticsError}
+              analyticsLoaded={analyticsLoaded}
+              analyticsLoading={analyticsLoading}
+              cards={cards}
+              sortKey={analyticsSortKey}
+              onRefresh={() => {
+                void refreshAnalytics(true)
+              }}
+              onSortKeyChange={setAnalyticsSortKey}
+            />
+          </div>
         </DialogContent>
       </Dialog>
 
