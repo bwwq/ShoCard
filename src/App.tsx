@@ -1468,8 +1468,6 @@ function ImageCropDialog({
 
 type TavernCardItemProps = {
   card: TavernCard
-  cardAnalytics?: CardAnalytics
-  isAdmin: boolean
   isEditMode: boolean
   onCopyLink: (cardUrl: string) => void
   onDeleteCard: (cardId: string) => void
@@ -1791,8 +1789,6 @@ function AnalyticsPanel({
 
 function TavernCardItem({
   card,
-  cardAnalytics,
-  isAdmin,
   isEditMode,
   onCopyLink,
   onDeleteCard,
@@ -1853,20 +1849,6 @@ function TavernCardItem({
             <span className="sr-only">复制</span>
           </Button>
         </div>
-        {isAdmin ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span
-              className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/70 px-2.5 py-1"
-              title="按 IP 去重后的点击"
-            >
-              <MousePointerClick className="size-3.5" />
-              真实点击 {formatCount(cardAnalytics?.uniqueClicks || 0)}
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/70 px-2.5 py-1">
-              总点击 {formatCount(cardAnalytics?.clicks || 0)}
-            </span>
-          </div>
-        ) : null}
       </CardContent>
       {isEditMode ? (
         <CardFooter className="justify-end">
@@ -1980,6 +1962,7 @@ function App() {
   const [analyticsLoaded, setAnalyticsLoaded] = useState(false)
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [analyticsError, setAnalyticsError] = useState('')
+  const [analyticsDialogOpen, setAnalyticsDialogOpen] = useState(false)
   const [analyticsSortKey, setAnalyticsSortKey] =
     useState<AnalyticsSortKey>('clicks')
   const [legacyStateAvailable, setLegacyStateAvailable] = useState(() =>
@@ -2009,7 +1992,11 @@ function App() {
   }, [siteTitle])
 
   useEffect(() => {
-    sendAnalyticsEvent('/api/analytics/visit', {})
+    const timeoutId = window.setTimeout(() => {
+      sendAnalyticsEvent('/api/analytics/visit', {})
+    }, 1500)
+
+    return () => window.clearTimeout(timeoutId)
   }, [])
 
   useEffect(() => {
@@ -2042,33 +2029,6 @@ function App() {
         setStateLoaded(true)
         lastSavedStateRef.current = JSON.stringify(nextState)
 
-        if (authStatus.isAdmin) {
-          setAnalyticsLoading(true)
-
-          try {
-            const nextAnalytics = await loadAnalytics()
-
-            if (cancelled) {
-              return
-            }
-
-            setAnalytics(nextAnalytics)
-            setAnalyticsLoaded(true)
-            setAnalyticsError('')
-          } catch (error) {
-            if (cancelled) {
-              return
-            }
-
-            setAnalyticsError(
-              error instanceof Error ? error.message : '无法加载统计',
-            )
-          } finally {
-            if (!cancelled) {
-              setAnalyticsLoading(false)
-            }
-          }
-        }
       } catch (error) {
         if (cancelled) {
           return
@@ -2285,6 +2245,14 @@ function App() {
       }
     } finally {
       setAnalyticsLoading(false)
+    }
+  }
+
+  function openAnalyticsDialog() {
+    setAnalyticsDialogOpen(true)
+
+    if (!analyticsLoaded && !analyticsLoading) {
+      void refreshAnalytics(false)
     }
   }
 
@@ -3019,7 +2987,6 @@ function App() {
       setAdminAccount('')
       setAdminPassword('')
       setAdminError('')
-      await refreshAnalytics(false)
       notify(migratedState ? '已恢复本地存档到服务器' : '已进入 admin 浏览模式')
     } catch (error) {
       setAdminError(error instanceof Error ? error.message : '登录失败')
@@ -3039,6 +3006,7 @@ function App() {
     setIsAdmin(false)
     setIsEditMode(false)
     setEditingCard(null)
+    setAnalyticsDialogOpen(false)
     setAnalytics(createEmptyAnalytics())
     setAnalyticsLoaded(false)
     setAnalyticsError('')
@@ -3348,7 +3316,7 @@ function App() {
   function trackCardOpen(card: TavernCard) {
     sendAnalyticsEvent('/api/analytics/click', { cardId: card.id })
 
-    if (isAdmin) {
+    if (isAdmin && analyticsDialogOpen) {
       window.setTimeout(() => {
         void refreshAnalytics(false)
       }, 500)
@@ -3535,6 +3503,17 @@ function App() {
                   <span className="hidden px-2 text-xs font-medium text-muted-foreground sm:inline">
                     Admin
                   </span>
+                  <Button
+                    className="h-9 px-3"
+                    size="sm"
+                    title="数据"
+                    type="button"
+                    variant="ghost"
+                    onClick={openAnalyticsDialog}
+                  >
+                    <ChartColumn />
+                    数据
+                  </Button>
                   <Button
                     className="h-9 px-3"
                     size="sm"
@@ -3882,21 +3861,6 @@ function App() {
           ) : null}
 
           <section className="min-w-0">
-            {isAdmin ? (
-              <AnalyticsPanel
-                analytics={analytics}
-                analyticsError={analyticsError}
-                analyticsLoaded={analyticsLoaded}
-                analyticsLoading={analyticsLoading}
-                cards={cards}
-                sortKey={analyticsSortKey}
-                onRefresh={() => {
-                  void refreshAnalytics(true)
-                }}
-                onSortKeyChange={setAnalyticsSortKey}
-              />
-            ) : null}
-
             <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-card/80 px-4 py-3 shadow-hairline backdrop-blur-xl">
               <div className="min-w-0">
                 <h2 className="text-base font-semibold leading-6">展示区</h2>
@@ -3935,8 +3899,6 @@ function App() {
                       {recommendedCards.map((card) => (
                         <TavernCardItem
                           card={card}
-                          cardAnalytics={analytics.cards[card.id]}
-                          isAdmin={isAdmin}
                           isEditMode={isEditMode}
                           key={`recommended-${card.id}`}
                           onCopyLink={copyLink}
@@ -3968,8 +3930,6 @@ function App() {
                       {group.map((card) => (
                         <TavernCardItem
                           card={card}
-                          cardAnalytics={analytics.cards[card.id]}
-                          isAdmin={isAdmin}
                           isEditMode={isEditMode}
                           key={card.id}
                           onCopyLink={copyLink}
@@ -3993,6 +3953,37 @@ function App() {
           </section>
         )}
       </div>
+
+      <Dialog
+        open={analyticsDialogOpen && isAdmin}
+        onOpenChange={(open) => {
+          setAnalyticsDialogOpen(open)
+          if (open && !analyticsLoaded && !analyticsLoading) {
+            void refreshAnalytics(false)
+          }
+        }}
+      >
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>数据</DialogTitle>
+            <DialogDescription className="sr-only">
+              查看访问总览和点击排行
+            </DialogDescription>
+          </DialogHeader>
+          <AnalyticsPanel
+            analytics={analytics}
+            analyticsError={analyticsError}
+            analyticsLoaded={analyticsLoaded}
+            analyticsLoading={analyticsLoading}
+            cards={cards}
+            sortKey={analyticsSortKey}
+            onRefresh={() => {
+              void refreshAnalytics(true)
+            }}
+            onSortKeyChange={setAnalyticsSortKey}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={adminDialogOpen}

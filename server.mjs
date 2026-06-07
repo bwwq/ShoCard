@@ -869,13 +869,13 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === '/api/analytics/visit' && req.method === 'POST') {
-    await recordVisit(req)
+    void recordVisit(req).catch(() => {})
     sendJson(res, 200, { ok: true })
     return
   }
 
   if (pathname === '/api/analytics/click' && req.method === 'POST') {
-    await recordCardClick(req, await readJsonBody(req))
+    void recordCardClick(req, await readJsonBody(req)).catch(() => {})
     sendJson(res, 200, { ok: true })
     return
   }
